@@ -1,0 +1,1 @@
+"""The WEM Portal component."""

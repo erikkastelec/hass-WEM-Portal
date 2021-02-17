@@ -1,0 +1,13 @@
+{
+  "domain": "wemportal",
+  "name": "WEM Portal",
+  "documentation": "https://github.com/erikkastelec/hass-WEM-Portal",
+  "dependencies": [],
+  "codeowners": [
+    "@erikkastelec"
+  ],
+  "requirements": [
+    "scrapyscript==1.1.0",
+    "scrapy==2.4.1"
+  ]
+}
