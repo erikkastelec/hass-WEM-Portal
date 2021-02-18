@@ -1,8 +1,10 @@
 {
   "domain": "wemportal",
-  "name": "WEM Portal",
+  "name": "Weishaupt WEM Portal",
   "documentation": "https://github.com/erikkastelec/hass-WEM-Portal",
+  "issue_tracker": "https://github.com/erikkastelec/hass-WEM-Portal/issues",
   "dependencies": [],
+  "version": "1.0.0",
   "codeowners": [
     "@erikkastelec"
   ],
