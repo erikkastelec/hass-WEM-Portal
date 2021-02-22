@@ -8,7 +8,7 @@ import scrapyscript
 from scrapy import FormRequest, Spider
 
 from .const import (
-    START_URLS
+    START_URLS, _LOGGER
 )
 
 
@@ -24,20 +24,30 @@ class WemPortalApi(object):
         """Call spider to crawl WEM Portal"""
         wemportalJob = scrapyscript.Job(WemPortalSpider, self.username, self.password)
         processor = scrapyscript.Processor(settings=None)
-        data = processor.run([wemportalJob])[0]
+        data = None
+        try:
+            data = processor.run([wemportalJob])[0]
+        except IndexError:
+            _LOGGER.exception('There was a problem with getting data from WEM Portal. If this problem persists, '
+                              'open an issue at https://github.com/erikkastelec/hass-WEM-Portal/issues')
+        try:
+            if data['authErrorFlag']:
+                _LOGGER.exception('AuthenticationError: Could not login with provided username and password. Check if '
+                                  'your config contains the right credentials')
+        except KeyError:
+            """If authentication was successful"""
+            pass
         return data
 
 
 class WemPortalSpider(Spider):
     name = 'WemPortalSpider'
     start_urls = START_URLS
-    custom_settings = {
-
-    }
 
     def __init__(self, username, password, **kw):
         self.username = username
         self.password = password
+        self.authErrorFlag = False
         super().__init__(**kw)
 
     def parse(self, response):
@@ -45,20 +55,28 @@ class WemPortalSpider(Spider):
         return FormRequest.from_response(response,
                                          formdata={
                                              'ctl00$content$tbxUserName': self.username,
-                                             'ctl00$content$tbxPassword': self.password
+                                             'ctl00$content$tbxPassword': self.password,
+                                             'Accept-Language': 'en-US,en;q=0.5'
                                          },
                                          callback=self.navigate_to_expert_page)
 
     def navigate_to_expert_page(self, response):
-        form_data = self.generate_form_data(response)
+        if response.url == 'https://www.wemportal.com/Web/login.aspx?AspxAutoDetectCookieSupport=1':
+            _LOGGER.debug("Authhentication failed")
+            self.authErrorFlag = True
+            form_data = {}
+        else:
+            _LOGGER.debug("Authhentication successful")
+            form_data = self.generate_form_data(response)
+            _LOGGER.debug("Form data processed")
         return FormRequest(url='https://www.wemportal.com/Web/default.aspx',
                            formdata=form_data,
                            headers={
                                'Content-Type': 'application/x-www-form-urlencoded',
-                               'Cookie': response.request.headers.getlist('Cookie')[0].decode("utf-8")
+                               'Cookie': response.request.headers.getlist('Cookie')[0].decode("utf-8"),
+                               'Accept-Language': 'en-US,en;q=0.5'
                            },
                            method='POST',
-
                            callback=self.scrape_pages)
 
     def generate_form_data(self, response):
@@ -84,6 +102,9 @@ class WemPortalSpider(Spider):
         }
 
     def scrape_pages(self, response):
+        if self.authErrorFlag:
+            yield {'authErrorFlag': True}
+        _LOGGER.debug("Scraping page")
         output = {}
         for div in response.xpath('//div[@class="RadPanelBar RadPanelBar_Default rpbSimpleData"]'):
             spans = div.xpath('.//span/text()').extract()
@@ -94,5 +115,9 @@ class WemPortalSpider(Spider):
                     output[index] = int(spans[i + 1].split(' ')[0])
                 except ValueError:
                     output[index] = spans[i + 1].split(' ')[0]
-
+                """Edge cases"""
+                if (
+                        index == 'heat_pump-power_requirement' or index == 'heat_pump_frequency_compressor' or index == 'heat_pump_frequency_compressor') and \
+                        output[index] == 'off':
+                    output[index] = 0
         yield output

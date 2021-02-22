@@ -6,6 +6,10 @@ Custom component for retrieving sensor information from Weishaupt WEM Portal.
 Component uses webscraping to get all the sensor data from the Weishaupt WEM Portal (Expert view) and makes it available
 in [Home Assistant](https://home-assistant.io/).
 
+## Installation
+
+Full restart of the Home Assistant is required. Restarting from GUI won't work, due to missing dependencies.
+
 ## Configuration
 
 Entities specified under resources are added to home-assistant.  
@@ -16,7 +20,7 @@ Configuration variables:
 
 - `username`: Email address used for login into WEM Portal
 - `password`: : Email address used for login into WEM Portal
-- `scan_interval (Optional)`: Defines update frequency. Optional and in seconds (defaults to 15 min, minimum value is 5
+- `scan_interval (Optional)`: Defines update frequency. Optional and in seconds (defaults to 30 min, minimum value is 15
   min).
 - `resources`: list of entities, which will be added to home-assistant
 
@@ -26,7 +30,7 @@ Add the following to your `configuration.yaml` file:
 # Example configuration.yaml entry
 sensor:
   - platform: wemportal
-    #scan_interval: 900
+    #scan_interval: 1800
     username: your_username
     password: your_password
     resources:

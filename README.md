@@ -40,7 +40,8 @@ Make sure to copy the exact name of the entity from the config example below, as
 Configuration variables:
 - `username`: Email address used for login into WEM Portal
 - `password`: : Email address used for login into WEM Portal
-- `scan_interval (Optional)`: Defines update frequency. Optional and in seconds (defaults to 15 min, minimum value is 5 min).
+- `scan_interval (Optional)`: Defines update frequency. Optional and in seconds (defaults to 30 min, minimum value is 15
+  min).
 - `resources`: list of entities, which will be added to home-assistant
 
 Add the following to your `configuration.yaml` file:

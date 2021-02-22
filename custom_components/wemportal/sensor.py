@@ -6,7 +6,7 @@ https://github.com/erikkastelec/hass-WEM-Portal
 Configuration for this platform:
 sensor:
   - platform: wemportal
-    scan_interval: 900
+    scan_interval: 1800
     username: username
     password: password
     resources:
@@ -364,7 +364,7 @@ SENSOR_TYPES = {
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Optional(CONF_NAME, default=DEFAULT_NAME): config_validation.string,
-        vol.Optional(CONF_SCAN_INTERVAL, default=timedelta(minutes=15)): config_validation.time_period,
+        vol.Optional(CONF_SCAN_INTERVAL, default=timedelta(minutes=30)): config_validation.time_period,
         vol.Required(CONF_USERNAME): config_validation.string,
         vol.Required(CONF_PASSWORD): config_validation.string,
         vol.Required(CONF_RESOURCES, default=[]): vol.All(
@@ -391,7 +391,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         name="wem_portal_sensor",
         update_method=async_update_data,
         # Polling interval. Will only be polled if there are subscribers.
-        update_interval=max(config.get(CONF_SCAN_INTERVAL), timedelta(minutes=5)),
+        update_interval=max(config.get(CONF_SCAN_INTERVAL), timedelta(minutes=15)),
     )
 
     # Fetch initial data so we have data when entities subscribe
@@ -422,7 +422,6 @@ class WemPortalSensor(Entity):
         self._sensor_prefix = sensor_prefix
         self._entity_type = SENSOR_TYPES[self.type][0]
         self._name = SENSOR_TYPES[self.type][0]
-        # "{} {}".format(sensor_prefix, SENSOR_TYPES[self.type][0])
         self._unit = SENSOR_TYPES[self.type][1]
         self._icon = SENSOR_TYPES[self.type][2]
         self._state = self.state
