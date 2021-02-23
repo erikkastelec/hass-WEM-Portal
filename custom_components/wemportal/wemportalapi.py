@@ -115,27 +115,38 @@ class WemPortalSpider(Spider):
         _LOGGER.debug("Scraping page")
         output = {}
         for i, div in enumerate(response.xpath('//div[@class="RadPanelBar RadPanelBar_Default rpbSimpleData"]')):
-            header_query = '#ctl00_rdMain_C_controlExtension_rptDisplayContent_ctl0' + str(
-                i) + '_ctl00_rpbGroupData_i0_HeaderTemplate_lblHeaderText::text'
-            header = div.css(header_query).extract()[0]
-            header = header.replace("  ", "").replace(" ", "_").lower()
-            names = div.xpath('.//span[@class="simpleDataName"]/text()').extract()
-            values = div.xpath('.//span[@class="simpleDataValue"]/text()').extract()
-            for j in range(len(names)):
-                name = names[j].replace("  ", "").replace(" ", "_").lower()
-                name = header + '-' + name
-                split_value = values[j].split(' ')
-                unit = ""
-                if len(split_value) == 2:
-                    value = split_value[0]
-                    unit = split_value[1]
-                else:
-                    value = split_value[0]
+            header_query = "//span[@id='ctl00_rdMain_C_controlExtension_rptDisplayContent_ctl0" + str(
+                i) + "_ctl00_rpbGroupData_i0_HeaderTemplate_lblHeaderText']/text() "
+            # Catch heading not starting at 0
+            try:
+                header = div.xpath(header_query).extract()[0]
+                header = header.replace("  ", "").replace(" ", "_").lower()
+            except IndexError:
+                header = "unknown"
+                continue
+            for td in div.xpath('.//table[@class="simpleDataTable"]//tr'):
                 try:
-                    value = int(value)
-                except ValueError:
-                    pass
-                icon_mapper = defaultdict(lambda: "mdi:flash")
-                icon_mapper['°C'] = "mdi:thermometer"
-                output[name] = (value, icon_mapper[unit], unit)
+                    name = td.xpath('.//td//span[@class="simpleDataName"]/text()').extract()[0]
+                    value = td.xpath('.//td//span[@class="simpleDataValue"]/text()').extract()[0]
+                    name = name.replace("  ", "").replace(" ", "_").lower()
+                    name = header + '-' + name
+                    split_value = value.split(' ')
+                    unit = ""
+                    if len(split_value) >= 2:
+                        value = split_value[0]
+                        unit = split_value[1]
+                    else:
+                        value = split_value[0]
+                    try:
+                        value = int(value)
+                    except ValueError:
+                        pass
+
+                    icon_mapper = defaultdict(lambda: "mdi:flash")
+                    icon_mapper['°C'] = "mdi:thermometer"
+
+                    output[name] = (value, icon_mapper[unit], unit)
+                except IndexError:
+                    continue
+
         yield output
