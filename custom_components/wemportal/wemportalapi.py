@@ -120,7 +120,8 @@ class WemPortalSpider(Spider):
             # Catch heading not starting at 0
             try:
                 header = div.xpath(header_query).extract()[0]
-                header = header.replace("  ", "").replace(" ", "_").lower()
+                header = header.replace("/#", "").replace("  ", "").replace(" - ", "_").replace("/*+/*", "_").replace(
+                    " ", "_").lower()
             except IndexError:
                 header = "unknown"
                 continue
