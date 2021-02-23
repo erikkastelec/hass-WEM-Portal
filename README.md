@@ -36,8 +36,8 @@ custom_components
 ## Configuration
 
 Configuration variables:
-- `username`: Email address used for login into WEM Portal
-- `password`: : Email address used for login into WEM Portal
+- `username`: Email address used for logging into WEM Portal
+- `password`: Password used for logging into WEM Portal
 - `scan_interval (Optional)`: Defines update frequency. Optional and in seconds (defaults to 30 min, minimum value is 15
   min).
 
