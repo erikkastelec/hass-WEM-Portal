@@ -50,7 +50,7 @@ Add the following to your `configuration.yaml` file:
 # Example configuration.yaml entry
 sensor:
   - platform: wemportal
-    #scan_interval: 900
+    #scan_interval: 1800
     username: your_username
     password: your_password
     resources:

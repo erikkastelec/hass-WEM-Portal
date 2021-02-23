@@ -13,7 +13,7 @@ from .const import (
 
 
 class WemPortalApi(object):
-    """ Wrapper class to the Atag One API """
+    """ Wrapper class for Weishaupt WEM Portal"""
 
     def __init__(self, username, password):
         self.data = None
@@ -61,12 +61,13 @@ class WemPortalSpider(Spider):
                                          callback=self.navigate_to_expert_page)
 
     def navigate_to_expert_page(self, response):
+        _LOGGER.debug("Print user page HTML: %s", response.text)
         if response.url == 'https://www.wemportal.com/Web/login.aspx?AspxAutoDetectCookieSupport=1':
-            _LOGGER.debug("Authhentication failed")
+            _LOGGER.debug("Authentication failed")
             self.authErrorFlag = True
             form_data = {}
         else:
-            _LOGGER.debug("Authhentication successful")
+            _LOGGER.debug("Authentication successful")
             form_data = self.generate_form_data(response)
             _LOGGER.debug("Form data processed")
         return FormRequest(url='https://www.wemportal.com/Web/default.aspx',
@@ -102,6 +103,7 @@ class WemPortalSpider(Spider):
         }
 
     def scrape_pages(self, response):
+        _LOGGER.debug("Print expert page HTML: %s", response.text)
         if self.authErrorFlag:
             yield {'authErrorFlag': True}
         _LOGGER.debug("Scraping page")
