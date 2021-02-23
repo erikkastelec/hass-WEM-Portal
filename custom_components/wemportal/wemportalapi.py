@@ -3,6 +3,8 @@ Gets sensor data from Weishaupt WEM portal using web scraping.
 Author: erikkastelec
 https://github.com/erikkastelec/hass-WEM-Portal
 """
+import time
+from collections import defaultdict
 
 import scrapyscript
 from scrapy import FormRequest, Spider
@@ -61,6 +63,8 @@ class WemPortalSpider(Spider):
                                          callback=self.navigate_to_expert_page)
 
     def navigate_to_expert_page(self, response):
+        # sleep for 5 seconds to get proper language and updated data
+        time.sleep(5)
         _LOGGER.debug("Print user page HTML: %s", response.text)
         if response.url == 'https://www.wemportal.com/Web/login.aspx?AspxAutoDetectCookieSupport=1':
             _LOGGER.debug("Authentication failed")
@@ -103,6 +107,8 @@ class WemPortalSpider(Spider):
         }
 
     def scrape_pages(self, response):
+        # sleep for 2 seconds to get proper language and updated data
+        time.sleep(2)
         _LOGGER.debug("Print expert page HTML: %s", response.text)
         if self.authErrorFlag:
             yield {'authErrorFlag': True}
@@ -129,5 +135,7 @@ class WemPortalSpider(Spider):
                     value = int(value)
                 except ValueError:
                     pass
-                output[name] = (value, unit)
+                icon_mapper = defaultdict(lambda: "mdi:flash")
+                icon_mapper['°C'] = "mdi:thermometer"
+                output[name] = (value, icon_mapper[unit], unit)
         yield output
