@@ -108,18 +108,26 @@ class WemPortalSpider(Spider):
             yield {'authErrorFlag': True}
         _LOGGER.debug("Scraping page")
         output = {}
-        for div in response.xpath('//div[@class="RadPanelBar RadPanelBar_Default rpbSimpleData"]'):
-            spans = div.xpath('.//span/text()').extract()
-            for i in range(1, len(spans), 2):
-                index = spans[0].replace("  ", "").replace(" ", "_").lower() + "-" + spans[i].replace("  ", "").replace(
-                    " ", "_").lower()
+        for i, div in enumerate(response.xpath('//div[@class="RadPanelBar RadPanelBar_Default rpbSimpleData"]')):
+            header_query = '#ctl00_rdMain_C_controlExtension_rptDisplayContent_ctl0' + str(
+                i) + '_ctl00_rpbGroupData_i0_HeaderTemplate_lblHeaderText::text'
+            header = div.css(header_query).extract()[0]
+            header = header.replace("  ", "").replace(" ", "_").lower()
+            names = div.xpath('.//span[@class="simpleDataName"]/text()').extract()
+            values = div.xpath('.//span[@class="simpleDataValue"]/text()').extract()
+            for j in range(len(names)):
+                name = names[j].replace("  ", "").replace(" ", "_").lower()
+                name = header + '-' + name
+                split_value = values[j].split(' ')
+                unit = ""
+                if len(split_value) == 2:
+                    value = split_value[0]
+                    unit = split_value[1]
+                else:
+                    value = split_value[0]
                 try:
-                    output[index] = int(spans[i + 1].split(' ')[0])
+                    value = int(value)
                 except ValueError:
-                    output[index] = spans[i + 1].split(' ')[0]
-                """Edge cases"""
-                if (
-                        index == 'heat_pump-power_requirement' or index == 'heat_pump_frequency_compressor' or index == 'heat_pump_frequency_compressor') and \
-                        output[index] == 'off':
-                    output[index] = 0
+                    pass
+                output[name] = (value, unit)
         yield output
