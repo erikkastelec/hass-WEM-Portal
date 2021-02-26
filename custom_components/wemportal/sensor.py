@@ -121,14 +121,14 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     sensor_prefix = config.get(CONF_NAME)
 
     async_add_entities(
-        WemPortalSensor(coordinator, _name, values[1], values[2]) for _name, values in coordinator.data.items()
+        WemPortalSensor(coordinator, _name, values[1], values[2], values[3]) for _name, values in coordinator.data.items()
     )
 
 
 class WemPortalSensor(Entity):
     """Representation of a WEM Portal Sensor."""
 
-    def __init__(self, coordinator, _name, _icon, _unit):
+    def __init__(self, coordinator, _name, _icon, _unit, _device_class):
         """Initialize the sensor."""
         self.coordinator = coordinator
         # self.type = sensor_type
@@ -139,6 +139,7 @@ class WemPortalSensor(Entity):
         self._icon = _icon
         self._unit = _unit
         self._state = self.state
+        self._device_class = _device_class
 
     @property
     def should_poll(self):
@@ -191,6 +192,11 @@ class WemPortalSensor(Entity):
     def unit_of_measurement(self):
         """Return the unit of measurement of this entity, if any."""
         return self._unit
+
+    @property
+    def device_class(self):
+        """Return the device class of this entity, if any."""
+        return self._device_class
 
     @property
     def device_state_attributes(self):

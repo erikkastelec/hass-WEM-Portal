@@ -146,7 +146,11 @@ class WemPortalSpider(Spider):
                     icon_mapper = defaultdict(lambda: "mdi:flash")
                     icon_mapper['°C'] = "mdi:thermometer"
 
-                    output[name] = (value, icon_mapper[unit], unit)
+                    device_class_mapper = defaultdict(lambda: None)
+                    device_class_mapper['°C'] = "temperature"
+                    device_class_mapper['%'] = "power_factor"
+
+                    output[name] = (value, icon_mapper[unit], unit, device_class_mapper[unit])
                 except IndexError:
                     continue
 
