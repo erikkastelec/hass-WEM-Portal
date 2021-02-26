@@ -9,61 +9,6 @@ sensor:
     scan_interval: 1800
     username: username
     password: password
-    resources:
-      - heating_circuit_1-outside_temperature
-      - heating_circuit_1-long_term_outside
-      - heating_circuit_1-room_temperature
-      - heating_circuit_1-flow_set_temperature
-      - heating_circuit_1-flow_temperature
-      - heating_circuit_1-version_R130
-      - heating_circuit_2-outside_temperature
-      - heating_circuit_2-outside_average
-      - heating_circuit_2-long_term_outside
-      - heating_circuit_2-room_setpoint
-      - heating_circuit_2-flow_temperature
-      - heating_circuit_2-pump
-      - heating_circuit_2-flow_set_temperature
-      - heating_circuit_2-version_WWP-EM-HK
-      - heat_pump-hot_water_temperature
-      - heat_pump-power_requirement
-      - heat_pump-dynamic_switching
-      - heat_pump-LWT
-      - heat_pump-return_temperature
-      - heat_pump-pump_speed
-      - heat_pump-volume_flow
-      - heat_pump-change_valve
-      - heat_pump-version_WWP-SG
-      - heat_pump-version_CPU
-      - heat_pump-set_frequency_compressor
-      - heat_pump-frequency_compressor
-      - heat_pump-outside_OAT
-      - heat_pump-heat_exchanger_ODU_entry
-      - heat_pump-OMT
-      - heat_pump-outside_CTT
-      - heat_pump-hydraulic_unit_ICT
-      - heat_pump-hydraulic_unit_IRT
-      - heat_pump-operating_hours_compresso
-      - heat_pump-switchings_compressor
-      - heat_pump-switching_defrost
-      - heat_pump-variant
-      - 2.WEZ-EP_1
-      - 2.WEZ-EP_2
-      - 2.WEZ-operating_hours_E1
-      - 2.WEZ-operating_hours_E2
-      - 2.WEZ-switchings_E1
-      - 2.WEZ-switching_E2
-      - statistics-consuption_day
-      - statistics-consuption_months
-      - statistics-consuption_year
-      - statistics-heat_consuption_day
-      - statistics-heat_consuption_month
-      - statistics-heat_consuption_year
-      - statistics-hot_water_consuption_day
-      - statistics-hot_water_consuption_mont
-      - statistics-hot_water_consuption_year
-      - statistics-cool_consuption_day
-      - statistics-cool_consuption_month
-      - statistics-cool_consuption_year
 """
 
 from datetime import timedelta
@@ -76,7 +21,11 @@ from homeassistant.const import (
     CONF_USERNAME,
     CONF_PASSWORD,
     CONF_SCAN_INTERVAL,
-    CONF_NAME
+    CONF_NAME,
+    DEVICE_CLASS_TEMPERATURE,
+    DEVICE_CLASS_ENERGY,
+    DEVICE_CLASS_POWER_FACTOR,
+    DEVICE_CLASS_POWER
 )
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
@@ -131,10 +80,7 @@ class WemPortalSensor(Entity):
     def __init__(self, coordinator, _name, _icon, _unit):
         """Initialize the sensor."""
         self.coordinator = coordinator
-        # self.type = sensor_type
         self._last_updated = None
-        # self._sensor_prefix = sensor_prefix
-        # self._entity_type = SENSOR_TYPES[self.type][0]
         self._name = _name
         self._icon = _icon
         self._unit = _unit
@@ -167,7 +113,6 @@ class WemPortalSensor(Entity):
     def unique_id(self):
         """Return the unique ID of the binary sensor."""
         return self._name
-        # f"{self._sensor_prefix}_{self._entity_type}"
 
     @property
     def icon(self):
@@ -191,6 +136,20 @@ class WemPortalSensor(Entity):
     def unit_of_measurement(self):
         """Return the unit of measurement of this entity, if any."""
         return self._unit
+
+    @property
+    def device_class(self):
+        """Return the device_class of this entity."""
+        if self._unit == '°C':
+            return DEVICE_CLASS_TEMPERATURE
+        elif self._unit == 'kWh' or self._unit == 'Wh':
+            return DEVICE_CLASS_ENERGY
+        elif self._unit == 'kW' or self._unit == 'W':
+            return DEVICE_CLASS_POWER
+        elif self._unit == '%':
+            return DEVICE_CLASS_POWER_FACTOR
+        else:
+            return None
 
     @property
     def device_state_attributes(self):
