@@ -63,8 +63,8 @@ class WemPortalSpider(Spider):
                                          callback=self.navigate_to_expert_page)
 
     def navigate_to_expert_page(self, response):
-        # sleep for 5 seconds to get proper language and updated data
-        time.sleep(5)
+        # sleep for 1 seconds to get proper language and updated data
+        time.sleep(1)
         _LOGGER.debug("Print user page HTML: %s", response.text)
         if response.url == 'https://www.wemportal.com/Web/login.aspx?AspxAutoDetectCookieSupport=1':
             _LOGGER.debug("Authentication failed")
@@ -107,8 +107,8 @@ class WemPortalSpider(Spider):
         }
 
     def scrape_pages(self, response):
-        # sleep for 2 seconds to get proper language and updated data
-        time.sleep(2)
+        # sleep for 1 seconds to get proper language and updated data
+        time.sleep(1)
         _LOGGER.debug("Print expert page HTML: %s", response.text)
         if self.authErrorFlag:
             yield {'authErrorFlag': True}

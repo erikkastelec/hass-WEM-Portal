@@ -15,8 +15,8 @@ Full restart of the Home Assistant is required. Restarting from GUI won't work, 
 Configuration variables:
 - `username`: Email address used for logging into WEM Portal
 - `password`: Password used for logging into WEM Portal
-- `scan_interval (Optional)`: Defines update frequency. Optional and in seconds (defaults to 30 min, minimum value is 15
-  min).
+- `scan_interval (Optional)`: Defines update frequency. Optional and in seconds (defaults to 30 min). Setting update
+  frequency bellow 15 min is not recommended.
 
 Add the following to your `configuration.yaml` file:
 
