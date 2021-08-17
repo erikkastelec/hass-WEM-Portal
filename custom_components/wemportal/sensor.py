@@ -1,5 +1,5 @@
 """
-Gets sensor data from Weishaupt WEM portal using web scraping.
+Gets sensor data from Weishaupt WEM portal using web scraping and mobile API
 Author: erikkastelec
 https://github.com/erikkastelec/hass-WEM-Portal
 
@@ -7,8 +7,10 @@ Configuration for this platform:
 sensor:
   - platform: wemportal
     scan_interval: 1800
+    api_scan_interval: 300
     username: username
     password: password
+    language: en
 """
 
 from datetime import timedelta
@@ -25,18 +27,30 @@ from homeassistant.const import (
     DEVICE_CLASS_TEMPERATURE,
     DEVICE_CLASS_ENERGY,
     DEVICE_CLASS_POWER_FACTOR,
-    DEVICE_CLASS_POWER
+    DEVICE_CLASS_POWER,
 )
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DEFAULT_NAME, _LOGGER, DEFAULT_TIMEOUT
+from .const import (
+    DEFAULT_NAME,
+    _LOGGER,
+    DEFAULT_TIMEOUT,
+    CONF_SCAN_INTERVAL_API,
+    CONF_LANGUAGE,
+)
 from .wemportalapi import WemPortalApi
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Optional(CONF_NAME, default=DEFAULT_NAME): config_validation.string,
-        vol.Optional(CONF_SCAN_INTERVAL, default=timedelta(minutes=30)): config_validation.time_period,
+        vol.Optional(
+            CONF_SCAN_INTERVAL, default=timedelta(minutes=30)
+        ): config_validation.time_period,
+        vol.Optional(
+            CONF_SCAN_INTERVAL_API, default=timedelta(minutes=5)
+        ): config_validation.time_period,
+        vol.Optional(CONF_LANGUAGE, default="en"): config_validation.string,
         vol.Required(CONF_USERNAME): config_validation.string,
         vol.Required(CONF_PASSWORD): config_validation.string,
     }
@@ -46,10 +60,15 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     """Setup the Wem Portal sensors."""
 
-    api = WemPortalApi(config.get(CONF_USERNAME), config.get(CONF_PASSWORD))
+    api = WemPortalApi(
+        config.get(CONF_USERNAME),
+        config.get(CONF_PASSWORD),
+        min(config.get(CONF_SCAN_INTERVAL), config.get(CONF_SCAN_INTERVAL_API)),
+        config.get(CONF_LANGUAGE),
+    )
 
     async def async_update_data():
-        """ fetch data from the Wem Portal website"""
+        """fetch data from the Wem Portal website"""
         async with async_timeout.timeout(DEFAULT_TIMEOUT):
             data = await hass.async_add_executor_job(api.fetch_data)
             return data
@@ -60,7 +79,9 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         name="wem_portal_sensor",
         update_method=async_update_data,
         # Polling interval. Will only be polled if there are subscribers.
-        update_interval=config.get(CONF_SCAN_INTERVAL),
+        update_interval=min(
+            config.get(CONF_SCAN_INTERVAL), config.get(CONF_SCAN_INTERVAL_API)
+        ),
     )
 
     # Fetch initial data so we have data when entities subscribe
@@ -68,9 +89,9 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
 
     entities = []
     sensor_prefix = config.get(CONF_NAME)
-
     async_add_entities(
-        WemPortalSensor(coordinator, _name, values[1], values[2]) for _name, values in coordinator.data.items()
+        WemPortalSensor(coordinator, _name, values[1], values[2])
+        for _name, values in coordinator.data.items()
     )
 
 
@@ -140,13 +161,13 @@ class WemPortalSensor(Entity):
     @property
     def device_class(self):
         """Return the device_class of this entity."""
-        if self._unit == '°C':
+        if self._unit == "°C":
             return DEVICE_CLASS_TEMPERATURE
-        elif self._unit == 'kWh' or self._unit == 'Wh':
+        elif self._unit == "kWh" or self._unit == "Wh":
             return DEVICE_CLASS_ENERGY
-        elif self._unit == 'kW' or self._unit == 'W':
+        elif self._unit == "kW" or self._unit == "W":
             return DEVICE_CLASS_POWER
-        elif self._unit == '%':
+        elif self._unit == "%":
             return DEVICE_CLASS_POWER_FACTOR
         else:
             return None
