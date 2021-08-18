@@ -38,6 +38,7 @@ from .const import (
     DEFAULT_TIMEOUT,
     CONF_SCAN_INTERVAL_API,
     CONF_LANGUAGE,
+    CONF_MODE,
 )
 from .wemportalapi import WemPortalApi
 
@@ -51,6 +52,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
             CONF_SCAN_INTERVAL_API, default=timedelta(minutes=5)
         ): config_validation.time_period,
         vol.Optional(CONF_LANGUAGE, default="en"): config_validation.string,
+        vol.Optional(CONF_MODE, default="both"): config_validation.string,
         vol.Required(CONF_USERNAME): config_validation.string,
         vol.Required(CONF_PASSWORD): config_validation.string,
     }
@@ -65,6 +67,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
         config.get(CONF_PASSWORD),
         min(config.get(CONF_SCAN_INTERVAL), config.get(CONF_SCAN_INTERVAL_API)),
         config.get(CONF_LANGUAGE),
+        config.get(CONF_MODE),
     )
 
     async def async_update_data():
@@ -73,15 +76,24 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
             data = await hass.async_add_executor_job(api.fetch_data)
             return data
 
+    # Set proper update_interval, based on selected mode
+    if config.get(CONF_MODE) == "web":
+        update_interval = config.get(CONF_SCAN_INTERVAL)
+
+    elif config.get(CONF_MODE) == "api":
+        update_interval = config.get(CONF_SCAN_INTERVAL_API)
+    else:
+        update_interval = min(
+            config.get(CONF_SCAN_INTERVAL), config.get(CONF_SCAN_INTERVAL_API)
+        )
+
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
         name="wem_portal_sensor",
         update_method=async_update_data,
         # Polling interval. Will only be polled if there are subscribers.
-        update_interval=min(
-            config.get(CONF_SCAN_INTERVAL), config.get(CONF_SCAN_INTERVAL_API)
-        ),
+        update_interval=update_interval,
     )
 
     # Fetch initial data so we have data when entities subscribe

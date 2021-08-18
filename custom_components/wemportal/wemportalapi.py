@@ -4,7 +4,6 @@ Author: erikkastelec
 https://github.com/erikkastelec/hass-WEM-Portal
 """
 import json
-import logging
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -15,22 +14,17 @@ import scrapyscript
 from fuzzywuzzy import fuzz
 from scrapy import FormRequest, Spider
 
-# from .const import (
-#     START_URLS, _LOGGER
-# )
-
-_LOGGER = logging.getLogger("custom_components.wemportal")
-DOMAIN = "wemportal"
-DEFAULT_NAME = "Weishaupt WEM Portal"
-DEFAULT_TIMEOUT = 60
-START_URLS = ["https://www.wemportal.com/Web/login.aspx"]
+from .const import (
+    START_URLS, _LOGGER
+)
 
 
 class WemPortalApi(object):
     """Wrapper class for Weishaupt WEM Portal"""
 
-    def __init__(self, username, password, scan_interval, language):
-        self.data = None
+    def __init__(self, username, password, scan_interval, language, mode):
+        self.data = {}
+        self.mode = mode
         self.username = username
         self.password = password
         self.scan_interval = scan_interval
@@ -51,15 +45,20 @@ class WemPortalApi(object):
         self.scrapingMapper = {}
 
     def fetch_data(self):
-        if (
-                self.last_scraping_update is None
-                or (datetime.now() - self.last_scraping_update) > self.scan_interval
-        ):
+        if self.mode == "web":
             self.fetch_webscraping_data()
+        elif self.mode == "api":
             self.fetch_api_data()
-            self.last_scraping_update = datetime.now()
         else:
-            self.fetch_api_data()
+            if (
+                    self.last_scraping_update is None
+                    or (datetime.now() - self.last_scraping_update) > self.scan_interval
+            ):
+                self.fetch_webscraping_data()
+                self.fetch_api_data()
+                self.last_scraping_update = datetime.now()
+            else:
+                self.fetch_api_data()
         return self.data
 
     def fetch_webscraping_data(self):
@@ -211,7 +210,7 @@ class WemPortalApi(object):
                 "itself. If this problem persists, open an issue at "
                 "https://github.com/erikkastelec/hass-WEM-Portal/issues'  "
             )
-            exit
+            return
         headers = self.headers
         headers["Content-Type"] = "application/json"
         response = reqs.post(
@@ -282,49 +281,66 @@ class WemPortalApi(object):
                 #             self.data[value["ParameterID"]]["value"] = entry["Name"]
                 #             break
 
-        # Map values to sensors we got during scraping.
-
-        for key in data.keys():
-            if key not in ["DeviceID", "Modules"]:
-                # Match only values, which are not writable (sensors)
-                if not data[key]["writeable"]:
-                    try:
-                        temp = self.scrapingMapper[key]
-                    except KeyError:
-                        for scraped_entity in self.data.keys():
+            # Map values to sensors we got during scraping.
+            icon_mapper = defaultdict(lambda: "mdi:flash")
+            icon_mapper["°C"] = "mdi:thermometer"
+            for key in data.keys():
+                if key not in ["DeviceID", "Modules"]:
+                    # Match only values, which are not writable (sensors)
+                    if not data[key]["writeable"]:
+                        # Only when mode == both. Combines data from web and api
+                        if self.mode == "both":
                             try:
-                                if (
-                                        fuzz.ratio(
-                                            data[key]["friendlyName"],
-                                            scraped_entity.split("-")[1],
-                                        )
-                                        >= 85
-                                ):
-                                    try:
-                                        self.scrapingMapper[key].append(scraped_entity)
-                                    except KeyError:
-                                        self.scrapingMapper[key] = [scraped_entity]
-                            except IndexError:
-                                pass
-                        # Check if empty
-                        try:
-                            temp = self.scrapingMapper[key]
-                        except KeyError:
-                            self.scrapingMapper[key] = [data[key]["friendlyName"]]
-                    finally:
-                        for scraped_entity in self.scrapingMapper[key]:
-                            try:
-
-                                (a, b, c) = self.data[scraped_entity]
-                                self.data[scraped_entity] = (data[key]["value"], b, c)
+                                temp = self.scrapingMapper[key]
                             except KeyError:
-                                icon_mapper = defaultdict(lambda: "mdi:flash")
-                                icon_mapper["°C"] = "mdi:thermometer"
-                                self.data[scraped_entity] = (
-                                    data[key]["value"],
-                                    icon_mapper[data[key]["unit"]],
-                                    data[key]["unit"],
-                                )
+                                for scraped_entity in self.data.keys():
+                                    try:
+                                        if (
+                                                fuzz.ratio(
+                                                    data[key]["friendlyName"],
+                                                    scraped_entity.split("-")[1],
+                                                )
+                                                >= 85
+                                        ):
+                                            try:
+                                                self.scrapingMapper[key].append(
+                                                    scraped_entity
+                                                )
+                                            except KeyError:
+                                                self.scrapingMapper[key] = [
+                                                    scraped_entity
+                                                ]
+                                    except IndexError:
+                                        pass
+                                # Check if empty
+                                try:
+                                    temp = self.scrapingMapper[key]
+                                except KeyError:
+                                    self.scrapingMapper[key] = [
+                                        data[key]["friendlyName"]
+                                    ]
+                            finally:
+                                for scraped_entity in self.scrapingMapper[key]:
+                                    try:
+
+                                        (a, b, c) = self.data[scraped_entity]
+                                        self.data[scraped_entity] = (
+                                            data[key]["value"],
+                                            b,
+                                            c,
+                                        )
+                                    except KeyError:
+                                        self.data[scraped_entity] = (
+                                            data[key]["value"],
+                                            icon_mapper[data[key]["unit"]],
+                                            data[key]["unit"],
+                                        )
+                        else:
+                            self.data[data[key]["friendlyName"]] = (
+                                data[key]["value"],
+                                icon_mapper[data[key]["unit"]],
+                                data[key]["unit"],
+                            )
 
     def friendlyNameMapper(self, value):
         friendlyNameDict = {
