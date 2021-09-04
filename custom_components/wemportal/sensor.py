@@ -16,7 +16,7 @@ from datetime import timedelta
 import async_timeout
 import homeassistant.helpers.config_validation as config_validation
 import voluptuous as vol
-from homeassistant.components.sensor import PLATFORM_SCHEMA
+from homeassistant.components.sensor import SensorEntity, PLATFORM_SCHEMA, STATE_CLASS_MEASUREMENT
 from homeassistant.const import (
     CONF_USERNAME,
     CONF_PASSWORD,
@@ -27,7 +27,6 @@ from homeassistant.const import (
     DEVICE_CLASS_POWER_FACTOR,
     DEVICE_CLASS_POWER
 )
-from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import DEFAULT_NAME, _LOGGER, DEFAULT_TIMEOUT
@@ -74,7 +73,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     )
 
 
-class WemPortalSensor(Entity):
+class WemPortalSensor(SensorEntity):
     """Representation of a WEM Portal Sensor."""
 
     def __init__(self, coordinator, _name, _icon, _unit):
@@ -148,6 +147,14 @@ class WemPortalSensor(Entity):
             return DEVICE_CLASS_POWER
         elif self._unit == '%':
             return DEVICE_CLASS_POWER_FACTOR
+        else:
+            return None
+
+    @property
+    def state_class(self):
+        """Return the state class of this entity, if any."""
+        if self._unit == '°C' or self._unit == 'kWh' or self._unit == 'Wh' or self._unit == 'kW' or self._unit == 'W' or self._unit == '%':
+            return STATE_CLASS_MEASUREMENT
         else:
             return None
 
