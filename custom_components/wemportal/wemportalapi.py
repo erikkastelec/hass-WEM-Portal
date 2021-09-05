@@ -3,44 +3,52 @@ Gets sensor data from Weishaupt WEM portal using web scraping and mobile API
 Author: erikkastelec
 https://github.com/erikkastelec/hass-WEM-Portal
 """
+import copy
 import json
 import time
 from collections import defaultdict
 from datetime import datetime
 
 import requests as reqs
-# install python-Levenshtein
 import scrapyscript
 from fuzzywuzzy import fuzz
+from homeassistant.const import (
+    CONF_USERNAME,
+    CONF_PASSWORD,
+    CONF_SCAN_INTERVAL,
+)
 from scrapy import FormRequest, Spider
 
 from .const import (
-    START_URLS, _LOGGER
+    _LOGGER,
+    CONF_SCAN_INTERVAL_API,
+    CONF_LANGUAGE,
+    CONF_MODE,
+    START_URLS,
 )
 
 
 class WemPortalApi(object):
     """Wrapper class for Weishaupt WEM Portal"""
 
-    def __init__(self, username, password, scan_interval, language, mode):
+    def __init__(self, config):
         self.data = {}
-        self.mode = mode
-        self.username = username
-        self.password = password
-        self.scan_interval = scan_interval
-        self.username = username
-        self.password = password
-        self.language = language
-        self.cookies = None
+        self.mode = config.get(CONF_MODE)
+        self.username = config.get(CONF_USERNAME)
+        self.password = config.get(CONF_PASSWORD)
+        self.scan_interval = min(
+            config.get(CONF_SCAN_INTERVAL), config.get(CONF_SCAN_INTERVAL_API)
+        )
+        self.language = config.get(CONF_LANGUAGE)
         self.device_id = None
+        self.session = None
         self.modules = None
         self.last_scraping_update = None
         # Headers used for all API calls
         self.headers = {
-            "User-Agents": "WeishauptWEMApp",
+            "User-Agent": "WeishauptWEMApp",
             "X-Api-Version": "2.0.0.0",
-            "Accept": "application/json",
-            "Connection": "keep-alive",
+            "Accept": "*/*"
         }
         self.scrapingMapper = {}
 
@@ -84,9 +92,9 @@ class WemPortalApi(object):
 
     def fetch_api_data(self):
         """Get data from the mobile API"""
-        if self.cookies is None:
+        if self.session is None:
             self.apiLogin()
-        if self.device_id is None:
+        if self.device_id is None or self.modules is None:
             self.getDevices()
             self.getParameters()
         self.getData()
@@ -105,34 +113,39 @@ class WemPortalApi(object):
             "AppVersion": "2.0.2",
             "ClientOS": "Android",
         }
-
-        response = reqs.post(
+        self.session = reqs.Session()
+        self.session.cookies.clear()
+        self.session.headers.update(self.headers)
+        response = self.session.post(
             "https://www.wemportal.com/app/Account/Login",
-            headers=self.headers,
             data=payload,
         )
         if response.status_code != 200:
-            self.cookies = None
             _LOGGER.error(
-                "Authentication Error: Check if your webscraping_login credentials are correct."
+                "Authentication Error: Check if your login credentials are correct."
+                + "receive response code: "
+                + str(response.status_code)
+                + ", response: "
+                + str(response.content)
+                # + ", request headers: "
+                # + str(response.request.headers)
+                # + ", request data: "
+                # + str(response.request.body)
             )
-        else:
-            self.cookies = response.cookies
 
     def getDevices(self):
+        _LOGGER.debug("Fetching api device data")
         self.modules = {}
-        response = reqs.get(
+        response = self.session.get(
             "https://www.wemportal.com/app/device/Read",
-            cookies=self.cookies,
-            headers=self.headers,
+
         )
         # If session expired
         if response.status_code == 401:
             self.apiLogin()
-            response = reqs.get(
+            response = self.session.get(
                 "https://www.wemportal.com/app/device/Read",
-                cookies=self.cookies,
-                headers=self.headers,
+
             )
 
         data = response.json()
@@ -146,6 +159,7 @@ class WemPortalApi(object):
             }
 
     def getParameters(self):
+        _LOGGER.debug("Fetching api parameters data")
         delete_candidates = []
         for key, values in self.modules.items():
             data = {
@@ -153,19 +167,17 @@ class WemPortalApi(object):
                 "ModuleIndex": values["index"],
                 "ModuleType": values["type"],
             }
-            response = reqs.post(
+            response = self.session.post(
                 "https://www.wemportal.com/app/EventType/Read",
-                cookies=self.cookies,
-                headers=self.headers,
+
                 data=data,
             )
             # If session expired
             if response.status_code == 401:
                 self.apiLogin()
-                response = reqs.post(
+                response = self.session.post(
                     "https://www.wemportal.com/app/EventType/Read",
-                    cookies=self.cookies,
-                    headers=self.headers,
+
                     data=data,
                 )
             parameters = {}
@@ -189,6 +201,7 @@ class WemPortalApi(object):
 
     # Refresh data and retrieve new data
     def getData(self):
+        _LOGGER.debug("Fetching fresh api data")
         try:
             data = {
                 "DeviceID": self.device_id,
@@ -204,36 +217,37 @@ class WemPortalApi(object):
                     for module in self.modules.values()
                 ],
             }
-        except KeyError:
+        except KeyError as err:
+            _LOGGER.warning(err)
             _LOGGER.warning(
                 "An error occurred while gathering data. This issue should resolve by "
                 "itself. If this problem persists, open an issue at "
                 "https://github.com/erikkastelec/hass-WEM-Portal/issues'  "
             )
+            _LOGGER.debug(self.modules)
             return
-        headers = self.headers
+        headers = copy.deepcopy(self.headers)
         headers["Content-Type"] = "application/json"
-        response = reqs.post(
+        response = self.session.post(
             "https://www.wemportal.com/app/DataAccess/Refresh",
-            cookies=self.cookies,
+
             headers=headers,
             data=json.dumps(data),
         )
         if response.status_code == 401:
             self.apiLogin()
-            response = reqs.post(
+            response = self.session.post(
                 "https://www.wemportal.com/app/DataAccess/Refresh",
-                cookies=self.cookies,
+
                 headers=headers,
                 data=json.dumps(data),
             )
-        values = reqs.post(
+        values = self.session.post(
             "https://www.wemportal.com/app/DataAccess/Read",
-            cookies=self.cookies,
+
             headers=headers,
             data=json.dumps(data),
         ).json()
-
         for module in values["Modules"]:
             for value in module["Values"]:
                 # Skip schedules

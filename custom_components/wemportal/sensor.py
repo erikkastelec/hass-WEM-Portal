@@ -62,13 +62,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
     """Setup the Wem Portal sensors."""
 
-    api = WemPortalApi(
-        config.get(CONF_USERNAME),
-        config.get(CONF_PASSWORD),
-        min(config.get(CONF_SCAN_INTERVAL), config.get(CONF_SCAN_INTERVAL_API)),
-        config.get(CONF_LANGUAGE),
-        config.get(CONF_MODE),
-    )
+    api = WemPortalApi(config)
 
     async def async_update_data():
         """fetch data from the Wem Portal website"""
