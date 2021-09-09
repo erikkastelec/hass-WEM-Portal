@@ -18,7 +18,7 @@ from datetime import timedelta
 import async_timeout
 import homeassistant.helpers.config_validation as config_validation
 import voluptuous as vol
-from homeassistant.components.sensor import SensorEntity, PLATFORM_SCHEMA, STATE_CLASS_MEASUREMENT
+from homeassistant.components.sensor import SensorEntity, PLATFORM_SCHEMA, STATE_CLASS_MEASUREMENT, STATE_CLASS_TOTAL_INCREASING
 from homeassistant.const import (
     CONF_USERNAME,
     CONF_PASSWORD,
@@ -180,8 +180,10 @@ class WemPortalSensor(SensorEntity):
     @property
     def state_class(self):
         """Return the state class of this entity, if any."""
-        if self._unit == '°C' or self._unit == 'kWh' or self._unit == 'Wh' or self._unit == 'kW' or self._unit == 'W' or self._unit == '%':
+        if self._unit == '°C' or self._unit == 'kW' or self._unit == 'W' or self._unit == '%':
             return STATE_CLASS_MEASUREMENT
+        elif self._unit == 'kWh' or self._unit == 'Wh':
+            return STATE_CLASS_TOTAL_INCREASING
         else:
             return None
 
