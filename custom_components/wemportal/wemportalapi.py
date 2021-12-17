@@ -218,7 +218,6 @@ class WemPortalApi(object):
                 ],
             }
         except KeyError as err:
-            _LOGGER.warning(err)
             _LOGGER.warning(
                 "An error occurred while gathering data. This issue should resolve by "
                 "itself. If this problem persists, open an issue at "
