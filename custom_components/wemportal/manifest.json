@@ -4,7 +4,7 @@
   "documentation": "https://github.com/erikkastelec/hass-WEM-Portal",
   "issue_tracker": "https://github.com/erikkastelec/hass-WEM-Portal/issues",
   "dependencies": [],
-  "version": "1.2.0",
+  "version": "1.2.2",
   "codeowners": [
     "@erikkastelec"
   ],
@@ -12,5 +12,6 @@
     "scrapyscript==1.1.0",
     "scrapy==2.4.1",
     "fuzzywuzzy==0.18.0"
-  ]
+  ],
+  "iot_class": "cloud_polling"
 }
