@@ -1,7 +1,9 @@
 {
   "name": "Weishaupt WEM Portal",
   "domains": [
-    "sensor"
+    "sensor",
+    "number",
+    "select"
   ],
   "iot_class": "Cloud Polling"
 }

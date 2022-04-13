@@ -19,7 +19,7 @@ Configuration variables:
 - `scan_interval (Optional)`: Defines update frequency of web scraping. Optional and in seconds (defaults to 30 min).
   Setting update frequency bellow 15 min is not recommended.
 - `api_scan_interval (Optional)`: Defines update frequency for API data fetching. Optional and in seconds (defaults to 5
-  min).
+  min, should not be lower than 3 min).
 - `language (
   Optional)`: Defines preferred language. Use `en` for English translation or `de` for German. (defaults to en (
   English))
@@ -31,8 +31,7 @@ Add the following to your `configuration.yaml` file:
 
 ```yaml
 # Example configuration.yaml entry
-sensor:
-  - platform: wemportal
+wemportal:
     #scan_interval: 1800
     #api_scan_interval: 300
     #language: en

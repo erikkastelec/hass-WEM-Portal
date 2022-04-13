@@ -1,19 +1,9 @@
 """
-Sensor platform for wemportal component
+Select platform for wemportal component
 """
 
-from homeassistant.components.sensor import (
-    STATE_CLASS_MEASUREMENT,
-    STATE_CLASS_TOTAL_INCREASING,
-    SensorEntity,
-)
+from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    DEVICE_CLASS_ENERGY,
-    DEVICE_CLASS_POWER,
-    DEVICE_CLASS_POWER_FACTOR,
-    DEVICE_CLASS_TEMPERATURE,
-)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -27,19 +17,19 @@ async def async_setup_platform(
         async_add_entities: AddEntitiesCallback,
         discovery_info=None,
 ):
-    """Setup the Wem Portal sensors."""
+    """Setup the Wem Portal select."""
 
     coordinator = hass.data[DOMAIN]["coordinator"]
 
-    entities: list[WemPortalSensor] = []
+    entities: list[WemPortalSelect] = []
     for unique_id, values in coordinator.data.items():
-        if values["platform"] == "sensor":
-            entities.append(WemPortalSensor(coordinator, unique_id, values))
+        if values["platform"] == "select":
+            entities.append(WemPortalSelect(coordinator, unique_id, values))
 
     async_add_entities(entities)
 
 
-class WemPortalSensor(CoordinatorEntity, SensorEntity):
+class WemPortalSelect(CoordinatorEntity, SelectEntity):
     """Representation of a WEM Portal Sensor."""
 
     def __init__(self, coordinator, _unique_id, entity_data):
@@ -47,11 +37,35 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._last_updated = None
         self._name = _unique_id
-        self._unique_id = _unique_id
         self._parameter_id = entity_data["ParameterID"]
+        self._unique_id = _unique_id
         self._icon = entity_data["icon"]
         self._unit = entity_data["unit"]
         self._state = self.state
+        self._options = entity_data["options"]
+        self._options_names = entity_data["optionsNames"]
+        self._module_index = entity_data["ModuleIndex"]
+        self._module_type = entity_data["ModuleType"]
+
+    async def async_select_option(self, option: str) -> None:
+        """Call the API to change the parameter value"""
+        await self.hass.async_add_executor_job(
+            self.coordinator.api.change_value,
+            self._parameter_id,
+            self._module_index,
+            self._module_type,
+            self._options[self._options_names.index(option)],
+        )
+
+        self._state = option
+        self.coordinator.data[self._unique_id]["value"] = option
+
+        self.async_write_ha_state()
+
+    @property
+    def options(self) -> list[str]:
+        """Return list of available options"""
+        return self._options_names
 
     @property
     def should_poll(self):
@@ -78,7 +92,7 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def unique_id(self):
-        """Return the unique ID of the sensor."""
+        """Return the unique ID of the binary sensor."""
         return self._unique_id
 
     @property
@@ -104,29 +118,15 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
         """Return the unit of measurement of this entity, if any."""
         return self._unit
 
-    @property
-    def device_class(self):
-        """Return the device_class of this entity."""
-        if self._unit == "°C":
-            return DEVICE_CLASS_TEMPERATURE
-        elif self._unit in ("kWh", "Wh"):
-            return DEVICE_CLASS_ENERGY
-        elif self._unit in ("kW", "W"):
-            return DEVICE_CLASS_POWER
-        elif self._unit == "%":
-            return DEVICE_CLASS_POWER_FACTOR
-        else:
-            return None
-
-    @property
-    def state_class(self):
-        """Return the state class of this entity, if any."""
-        if self._unit in ("°C", "kW", "W", "%"):
-            return STATE_CLASS_MEASUREMENT
-        elif self._unit in ("kWh", "Wh"):
-            return STATE_CLASS_TOTAL_INCREASING
-        else:
-            return None
+    # @property
+    # def state_class(self):
+    #     """Return the state class of this entity, if any."""
+    #     if self._unit in ("°C", "kW", "W", "%"):
+    #         return STATE_CLASS_MEASUREMENT
+    #     elif self._unit in ("kWh", "Wh"):
+    #         return STATE_CLASS_TOTAL_INCREASING
+    #     else:
+    #         return None
 
     @property
     def extra_state_attributes(self):
