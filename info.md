@@ -32,12 +32,12 @@ Add the following to your `configuration.yaml` file:
 ```yaml
 # Example configuration.yaml entry
 wemportal:
-    #scan_interval: 1800
-    #api_scan_interval: 300
+  #scan_interval: 1800
+  #api_scan_interval: 300
   #language: en
   #mode: api
   username: your_username
-    password: your_password
+  password: your_password
 ```
 
 ## Troubleshooting
