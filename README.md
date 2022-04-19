@@ -63,7 +63,7 @@ wemportal:
   #language: en
   #mode: api
   username: your_username
-    password: your_password
+  password: your_password
 ```
 
 ## Troubleshooting
