@@ -29,7 +29,10 @@ custom_components
 │   ├── __init__.py
 │   ├── const.py
 │   ├── manifest.json
-│   └── sensor.py
+│   ├── coordinator.py
+│   ├── select.py
+│   ├── number.py
+│   ├── sensor.py
 │   └── wemportalapi.py  
 ```
 
@@ -42,25 +45,24 @@ Configuration variables:
 - `scan_interval (Optional)`: Defines update frequency of web scraping. Optional and in seconds (defaults to 30 min).
   Setting update frequency bellow 15 min is not recommended.
 - `api_scan_interval (Optional)`: Defines update frequency for API data fetching. Optional and in seconds (defaults to 5
-  min).
+  min, should not be lower than 3 min).
 - `language (
   Optional)`: Defines preferred language. Use `en` for English translation or `de` for German. (defaults to en (
   English))
-- `mode (Optional)`: Defines the mode of data fetching. Defaults to `both`, which queries website and api and provides
-  all the available data. Option `web` gets only the data on the website, while option `api` gets only the data
-  available through the mobile API.
+- `mode (Optional)`: Defines the mode of data fetching. Defaults to `api`, which gets the data available through the
+  mobile API. Option `web` gets only the data on the website, while option `both` queries website and api and provides
+  all the available data from both sources.
 
 Add the following to your `configuration.yaml` file:
 
 ```yaml
 # Example configuration.yaml entry
-sensor:
-  - platform: wemportal
-    #scan_interval: 1800
-    #api_scan_interval: 300
-    #language: en
-    #mode: both
-    username: your_username
+wemportal:
+  #scan_interval: 1800
+  #api_scan_interval: 300
+  #language: en
+  #mode: api
+  username: your_username
     password: your_password
 ```
 
