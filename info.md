@@ -23,9 +23,9 @@ Configuration variables:
 - `language (
   Optional)`: Defines preferred language. Use `en` for English translation or `de` for German. (defaults to en (
   English))
-- `mode (Optional)`: Defines the mode of data fetching. Defaults to `both`, which queries website and api and provides
-  all the available data. Option `web` gets only the data on the website, while option `api` gets only the data
-  available through the mobile API.
+- `mode (Optional)`: Defines the mode of data fetching. Defaults to `api`, which gets the data available through the
+  mobile API. Option `web` gets only the data on the website, while option `both` queries website and api and provides
+  all the available data from both sources.
 
 Add the following to your `configuration.yaml` file:
 
@@ -34,9 +34,9 @@ Add the following to your `configuration.yaml` file:
 wemportal:
     #scan_interval: 1800
     #api_scan_interval: 300
-    #language: en
-    #mode: both
-    username: your_username
+  #language: en
+  #mode: api
+  username: your_username
     password: your_password
 ```
 

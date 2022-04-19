@@ -2,18 +2,13 @@
 Sensor platform for wemportal component
 """
 
-from homeassistant.components.sensor import (
-    STATE_CLASS_MEASUREMENT,
-    STATE_CLASS_TOTAL_INCREASING,
-    SensorEntity,
-)
+from homeassistant.components.sensor import (STATE_CLASS_MEASUREMENT,
+                                             STATE_CLASS_TOTAL_INCREASING,
+                                             SensorEntity)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    DEVICE_CLASS_ENERGY,
-    DEVICE_CLASS_POWER,
-    DEVICE_CLASS_POWER_FACTOR,
-    DEVICE_CLASS_TEMPERATURE,
-)
+from homeassistant.const import (DEVICE_CLASS_ENERGY, DEVICE_CLASS_POWER,
+                                 DEVICE_CLASS_POWER_FACTOR,
+                                 DEVICE_CLASS_TEMPERATURE)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity

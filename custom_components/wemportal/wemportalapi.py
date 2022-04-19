@@ -12,20 +12,12 @@ from datetime import datetime, timedelta
 import requests as reqs
 import scrapyscript
 from fuzzywuzzy import fuzz
-from homeassistant.const import (
-    CONF_USERNAME,
-    CONF_PASSWORD,
-    CONF_SCAN_INTERVAL,
-)
+from homeassistant.const import (CONF_PASSWORD, CONF_SCAN_INTERVAL,
+                                 CONF_USERNAME)
 from scrapy import FormRequest, Spider
 
-from .const import (
-    _LOGGER,
-    CONF_SCAN_INTERVAL_API,
-    CONF_LANGUAGE,
-    CONF_MODE,
-    START_URLS,
-)
+from .const import (_LOGGER, CONF_LANGUAGE, CONF_MODE, CONF_SCAN_INTERVAL_API,
+                    START_URLS)
 
 
 class WemPortalApi:
