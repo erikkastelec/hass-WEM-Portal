@@ -12,12 +12,10 @@ from datetime import datetime, timedelta
 import requests as reqs
 import scrapyscript
 from fuzzywuzzy import fuzz
-from homeassistant.const import (CONF_PASSWORD, CONF_SCAN_INTERVAL,
-                                 CONF_USERNAME)
+from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from scrapy import FormRequest, Spider
 
-from .const import (_LOGGER, CONF_LANGUAGE, CONF_MODE, CONF_SCAN_INTERVAL_API,
-                    START_URLS)
+from .const import _LOGGER, CONF_LANGUAGE, CONF_MODE, CONF_SCAN_INTERVAL_API, START_URLS
 
 
 class WemPortalApi:
@@ -49,13 +47,7 @@ class WemPortalApi:
     def fetch_data(self):
 
         if self.mode == "web":
-            if (
-                    self.last_scraping_update is None
-                    or (datetime.now() - self.last_scraping_update + timedelta(seconds=5))
-                    > self.update_interval
-            ):
-                self.fetch_webscraping_data()
-                self.last_scraping_update = datetime.now()
+            self.fetch_webscraping_data()
         elif self.mode == "api":
             self.fetch_api_data()
         else:
@@ -396,7 +388,7 @@ class WemPortalApi:
                                                     data[key]["friendlyName"],
                                                     scraped_entity.split("-")[1],
                                                 )
-                                                >= 85
+                                                >= 90
                                         ):
                                             try:
                                                 self.scrapingMapper[key].append(
@@ -419,7 +411,7 @@ class WemPortalApi:
                                 for scraped_entity in self.scrapingMapper[key]:
                                     try:
                                         self.data[scraped_entity] = {
-                                            "value": self.data[scraped_entity]["value"],
+                                            "value": data[key]["value"],
                                             "name": self.data[scraped_entity]["name"],
                                             "unit": self.data[scraped_entity]["unit"],
                                             "icon": self.data[scraped_entity]["icon"],
@@ -476,6 +468,7 @@ class WemPortalApi:
 
     def translate(self, language, value):
         # TODO: Implement support for other languages.
+        value = value.lower()
         translationDict = {
             "en": {
                 "außsentemperatur": "outside_temperature",

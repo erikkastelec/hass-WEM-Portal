@@ -24,7 +24,6 @@ async def async_setup_platform(
     entities: list[WemPortalNumber] = []
     for unique_id, values in coordinator.data.items():
         if values["platform"] == "number":
-            _LOGGER.warning(unique_id)
             entities.append(WemPortalNumber(coordinator, unique_id, values))
 
     async_add_entities(entities)
