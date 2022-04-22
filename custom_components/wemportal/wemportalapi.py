@@ -52,9 +52,9 @@ class WemPortalApi:
             self.fetch_api_data()
         else:
             if (
-                    self.last_scraping_update is None
-                    or (datetime.now() - self.last_scraping_update + timedelta(seconds=5))
-                    > self.scan_interval
+                self.last_scraping_update is None
+                or (datetime.now() - self.last_scraping_update + timedelta(seconds=5))
+                > self.scan_interval
             ):
                 self.fetch_webscraping_data()
                 self.fetch_api_data()
@@ -181,7 +181,7 @@ class WemPortalApi:
             del self.modules[key]
 
     def change_value(
-            self, parameter_id, module_index, module_type, numeric_value, login=True
+        self, parameter_id, module_index, module_type, numeric_value, login=True
     ):
         """POST request to API to change a specific value"""
         _LOGGER.debug("Changing value for %s", parameter_id)
@@ -265,24 +265,13 @@ class WemPortalApi:
         ).json()
 
         # TODO: CLEAN UP
-
+        TESTING_COUNT = 0
         # Map values to sensors we got during scraping.
         icon_mapper = defaultdict(lambda: "mdi:flash")
         icon_mapper["°C"] = "mdi:thermometer"
         for module in values["Modules"]:
             for value in module["Values"]:
 
-                # Skip schedules
-                if (
-                        self.modules[(module["ModuleIndex"], module["ModuleType"])][
-                            "parameters"
-                        ][value["ParameterID"]]["DataType"]
-                        == 2
-                ):
-                    continue
-                # if self.modules[(module["ModuleIndex"], module["ModuleType"])]["parameters"][value["ParameterID"]][
-                #     "DataType"] == 1:
-                #     print(value)
                 name = self.modules[(module["ModuleIndex"], module["ModuleType"])][
                     "parameters"
                 ][value["ParameterID"]]["Name"]
@@ -308,17 +297,24 @@ class WemPortalApi:
                 if self.modules[(module["ModuleIndex"], module["ModuleType"])][
                     "parameters"
                 ][value["ParameterID"]]["EnumValues"]:
-                    if value["StringValue"] == "off":
-                        data[name]["value"] = 0
+                    if value["StringValue"] in [
+                        "off",
+                        "Label ist null",
+                        "Label ist null ",
+                    ]:
+                        data[name]["value"] = 0.0
                     else:
                         try:
-                            data[name]["value"] = int(value["StringValue"])
+                            data[name]["value"] = float(value["StringValue"])
                         except ValueError:
                             data[name]["value"] = value["StringValue"]
-
+                if data[name]["value"] in ["off", "Label ist null", "Label ist null "]:
+                    data[name]["value"] = 0.0
                 # Select entities
                 if data[name]["IsWriteable"]:
+
                     if data[name]["DataType"] == -1:
+
                         self.data[name] = {
                             "friendlyName": data[name]["friendlyName"],
                             "ParameterID": value["ParameterID"],
@@ -329,12 +325,12 @@ class WemPortalApi:
                             "ModuleIndex": module["ModuleIndex"],
                             "ModuleType": module["ModuleType"],
                             "platform": "number",
-                            "min_value": int(
+                            "min_value": float(
                                 self.modules[
                                     (module["ModuleIndex"], module["ModuleType"])
                                 ]["parameters"][value["ParameterID"]]["MinValue"]
                             ),
-                            "max_value": int(
+                            "max_value": float(
                                 self.modules[
                                     (module["ModuleIndex"], module["ModuleType"])
                                 ]["parameters"][value["ParameterID"]]["MaxValue"]
@@ -365,6 +361,41 @@ class WemPortalApi:
                                 ]["parameters"][value["ParameterID"]]["EnumValues"]
                             ],
                         }
+                    # switch platform
+
+                    elif data[name]["DataType"] == 2:
+                        try:
+                            if (
+                                int(
+                                    self.modules[
+                                        (module["ModuleIndex"], module["ModuleType"])
+                                    ]["parameters"][value["ParameterID"]]["MinValue"]
+                                )
+                                == 0
+                                and int(
+                                    self.modules[
+                                        (module["ModuleIndex"], module["ModuleType"])
+                                    ]["parameters"][value["ParameterID"]]["MaxValue"]
+                                )
+                                == 1
+                            ):
+                                self.data[name] = {
+                                    "friendlyName": data[name]["friendlyName"],
+                                    "ParameterID": value["ParameterID"],
+                                    "unit": value["Unit"],
+                                    "icon": icon_mapper[value["Unit"]],
+                                    "value": value["NumericValue"],
+                                    "DataType": data[name]["DataType"],
+                                    "ModuleIndex": module["ModuleIndex"],
+                                    "ModuleType": module["ModuleType"],
+                                    "platform": "switch",
+                                }
+                            else:
+                                # Skip schedules
+                                continue
+                        # Catches exception when converting to int when MinValur or MaxValue is Nones
+                        except Exception:
+                            continue
 
                 # if self.modules[(module["ModuleIndex"],module["ModuleType"])]["parameters"][value["ParameterID"]]["EnumValues"]:
                 #     for entry in self.modules[(module["ModuleIndex"],module["ModuleType"])]["parameters"][value["ParameterID"]]["EnumValues"]:
@@ -384,11 +415,11 @@ class WemPortalApi:
                                 for scraped_entity in self.data.keys():
                                     try:
                                         if (
-                                                fuzz.ratio(
-                                                    data[key]["friendlyName"],
-                                                    scraped_entity.split("-")[1],
-                                                )
-                                                >= 90
+                                            fuzz.ratio(
+                                                data[key]["friendlyName"],
+                                                scraped_entity.split("-")[1],
+                                            )
+                                            >= 90
                                         ):
                                             try:
                                                 self.scrapingMapper[key].append(
@@ -523,8 +554,8 @@ class WemPortalSpider(Spider):
         time.sleep(1)
         # _LOGGER.debug("Print user page HTML: %s", response.text)
         if (
-                response.url
-                == "https://www.wemportal.com/Web/login.aspx?AspxAutoDetectCookieSupport=1"
+            response.url
+            == "https://www.wemportal.com/Web/login.aspx?AspxAutoDetectCookieSupport=1"
         ):
             _LOGGER.debug("Authentication failed")
             self.authErrorFlag = True
@@ -558,17 +589,17 @@ class WemPortalSpider(Spider):
             "__EVENTTARGET": "ctl00$SubMenuControl1$subMenu",
             "__EVENTARGUMENT": "3",
             "ctl00_rdMain_ClientState": '{"Top":0,"Left":0,"DockZoneID":"ctl00_RDZParent","Collapsed":false,'
-                                        '"Pinned":false,"Resizable":false,"Closed":false,"Width":"99%","Height":null,'
-                                        '"ExpandedHeight":0,"Index":0,"IsDragged":false}',
+            '"Pinned":false,"Resizable":false,"Closed":false,"Width":"99%","Height":null,'
+            '"ExpandedHeight":0,"Index":0,"IsDragged":false}',
             "ctl00_SubMenuControl1_subMenu_ClientState": '{"logEntries":[{"Type":3},{"Type":1,"Index":"0","Data":{'
-                                                         '"text":"Overview","value":"110"}},{"Type":1,"Index":"1",'
-                                                         '"Data":{"text":"System:+dom","value":""}},{"Type":1,'
-                                                         '"Index":"2","Data":{"text":"User","value":"222"}},'
-                                                         '{"Type":1,"Index":"3","Data":{"text":"Expert",'
-                                                         '"value":"223","selected":true}},{"Type":1,"Index":"4",'
-                                                         '"Data":{"text":"Statistics","value":"225"}},{"Type":1,'
-                                                         '"Index":"5","Data":{"text":"Data+Loggers","value":"224"}}],'
-                                                         '"selectedItemIndex":"3"} ',
+            '"text":"Overview","value":"110"}},{"Type":1,"Index":"1",'
+            '"Data":{"text":"System:+dom","value":""}},{"Type":1,'
+            '"Index":"2","Data":{"text":"User","value":"222"}},'
+            '{"Type":1,"Index":"3","Data":{"text":"Expert",'
+            '"value":"223","selected":true}},{"Type":1,"Index":"4",'
+            '"Data":{"text":"Statistics","value":"225"}},{"Type":1,'
+            '"Index":"5","Data":{"text":"Data+Loggers","value":"224"}}],'
+            '"selectedItemIndex":"3"} ',
         }
 
     def scrape_pages(self, response):
@@ -580,25 +611,25 @@ class WemPortalSpider(Spider):
         _LOGGER.debug("Scraping page")
         output = {}
         for i, div in enumerate(
-                response.xpath(
-                    '//div[@class="RadPanelBar RadPanelBar_Default rpbSimpleData"]'
-                )
+            response.xpath(
+                '//div[@class="RadPanelBar RadPanelBar_Default rpbSimpleData"]'
+            )
         ):
             header_query = (
-                    "//span[@id='ctl00_rdMain_C_controlExtension_rptDisplayContent_ctl0"
-                    + str(i)
-                    + "_ctl00_rpbGroupData_i0_HeaderTemplate_lblHeaderText']/text() "
+                "//span[@id='ctl00_rdMain_C_controlExtension_rptDisplayContent_ctl0"
+                + str(i)
+                + "_ctl00_rpbGroupData_i0_HeaderTemplate_lblHeaderText']/text() "
             )
             # Catch heading not starting at 0
             try:
                 header = div.xpath(header_query).extract()[0]
                 header = (
                     header.replace("/#", "")
-                        .replace("  ", "")
-                        .replace(" - ", "_")
-                        .replace("/*+/*", "_")
-                        .replace(" ", "_")
-                        .casefold()
+                    .replace("  ", "")
+                    .replace(" - ", "_")
+                    .replace("/*+/*", "_")
+                    .replace(" ", "_")
+                    .casefold()
                 )
             except IndexError:
                 header = "unknown"
@@ -624,7 +655,7 @@ class WemPortalSpider(Spider):
                         value = ".".join(value.split(","))
                         value = float(value)
                     except ValueError:
-                        if value == "--" or value == "off":
+                        if value in ["off", "--", "Label ist null", "Label ist null "]:
                             value = 0.0
 
                     icon_mapper = defaultdict(lambda: "mdi:flash")
