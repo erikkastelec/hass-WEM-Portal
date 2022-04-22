@@ -19,7 +19,7 @@ from .wemportalapi import WemPortalApi
 
 CONFIG_SCHEMA = vol.Schema(
     {
-        vol.Optional(DOMAIN, default=[]): vol.Schema(
+        DOMAIN: vol.Schema(
             {
                 vol.Optional(
                     CONF_SCAN_INTERVAL, default=timedelta(minutes=30)
