@@ -5,10 +5,10 @@ from typing import Final
 _LOGGER = logging.getLogger("custom_components.wemportal")
 DOMAIN = "wemportal"
 DEFAULT_NAME = "Weishaupt WEM Portal"
-DEFAULT_TIMEOUT = 60
+DEFAULT_TIMEOUT = 120
 START_URLS = ["https://www.wemportal.com/Web/login.aspx"]
 CONF_SCAN_INTERVAL_API: Final = "api_scan_interval"
 CONF_LANGUAGE: Final = "language"
 CONF_MODE: Final = "mode"
 PLATFORMS = ["sensor", "number", "select"]
-REFRESH_WAIT_TIME: int = 60
+REFRESH_WAIT_TIME: int = 120
