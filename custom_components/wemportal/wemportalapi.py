@@ -265,7 +265,6 @@ class WemPortalApi:
         ).json()
 
         # TODO: CLEAN UP
-        TESTING_COUNT = 0
         # Map values to sensors we got during scraping.
         icon_mapper = defaultdict(lambda: "mdi:flash")
         icon_mapper["°C"] = "mdi:thermometer"
@@ -312,9 +311,7 @@ class WemPortalApi:
                     data[name]["value"] = 0.0
                 # Select entities
                 if data[name]["IsWriteable"]:
-
                     if data[name]["DataType"] == -1:
-
                         self.data[name] = {
                             "friendlyName": data[name]["friendlyName"],
                             "ParameterID": value["ParameterID"],
@@ -362,7 +359,6 @@ class WemPortalApi:
                             ],
                         }
                     # switch platform
-
                     elif data[name]["DataType"] == 2:
                         try:
                             if (
