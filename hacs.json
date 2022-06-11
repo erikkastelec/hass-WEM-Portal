@@ -3,7 +3,8 @@
   "domains": [
     "sensor",
     "number",
-    "select"
+    "select",
+    "switch"
   ],
   "iot_class": "Cloud Polling"
 }
