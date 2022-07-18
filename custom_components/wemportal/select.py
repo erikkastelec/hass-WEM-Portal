@@ -12,10 +12,10 @@ from .const import _LOGGER, DOMAIN
 
 
 async def async_setup_platform(
-        hass: HomeAssistant,
-        config_entry: ConfigEntry,
-        async_add_entities: AddEntitiesCallback,
-        discovery_info=None,
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info=None,
 ):
     """Setup the Wem Portal select."""
 
@@ -40,8 +40,6 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
         self._parameter_id = entity_data["ParameterID"]
         self._unique_id = _unique_id
         self._icon = entity_data["icon"]
-        self._unit = entity_data["unit"]
-        self._state = self.state
         self._options = entity_data["options"]
         self._options_names = entity_data["optionsNames"]
         self._module_index = entity_data["ModuleIndex"]
@@ -57,25 +55,23 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
             self._options[self._options_names.index(option)],
         )
 
-        self._state = option
-        self.coordinator.data[self._unique_id]["value"] = option
+        self.coordinator.data[self._unique_id]["value"] = self._options[
+            self._options_names.index(option)
+        ]
 
         self.async_write_ha_state()
 
     @property
     def options(self) -> list[str]:
-        """Return list of available options"""
+        """Return list of available options."""
         return self._options_names
 
     @property
-    def should_poll(self):
-        """No need to poll. Coordinator notifies entity of updates."""
-        return False
-
-    @property
-    def available(self):
-        """Return if entity is available."""
-        return self.coordinator.last_update_success
+    def current_option(self) -> str:
+        """Return the current option."""
+        return self._options_names[
+            self._options.index(self.coordinator.data[self._unique_id]["value"])
+        ]
 
     async def async_added_to_hass(self):
         """When entity is added to hass."""
@@ -99,34 +95,6 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
     def icon(self):
         """Icon to use in the frontend, if any."""
         return self._icon
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
-        try:
-            state = self.coordinator.data[self._unique_id]["value"]
-            if state:
-                return state
-            return 0
-        except KeyError:
-            _LOGGER.error("Can't find %s", self._unique_id)
-            _LOGGER.debug("Sensor data %s", self.coordinator.data)
-            return None
-
-    @property
-    def unit_of_measurement(self):
-        """Return the unit of measurement of this entity, if any."""
-        return self._unit
-
-    # @property
-    # def state_class(self):
-    #     """Return the state class of this entity, if any."""
-    #     if self._unit in ("°C", "kW", "W", "%"):
-    #         return STATE_CLASS_MEASUREMENT
-    #     elif self._unit in ("kWh", "Wh"):
-    #         return STATE_CLASS_TOTAL_INCREASING
-    #     else:
-    #         return None
 
     @property
     def extra_state_attributes(self):
