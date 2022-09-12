@@ -42,13 +42,13 @@ class WemPortalNumber(CoordinatorEntity, NumberEntity):
         self._icon = entity_data["icon"]
         self._unit = entity_data["unit"]
         self._state = self.state
-        self._attr_min_value = entity_data["min_value"]
-        self._attr_max_value = entity_data["max_value"]
-        self._attr_step = entity_data["step"]
+        self._attr_native_min_value = entity_data["min_value"]
+        self._attr_native_max_value = entity_data["max_value"]
+        self._attr_native_step = entity_data["step"]
         self._module_index = entity_data["ModuleIndex"]
         self._module_type = entity_data["ModuleType"]
 
-    async def async_set_value(self, value: float) -> None:
+    async def async_set_native_value(self, value: float) -> None:
         """Update the current value."""
         await self.hass.async_add_executor_job(
             self.coordinator.api.change_value,
@@ -108,7 +108,7 @@ class WemPortalNumber(CoordinatorEntity, NumberEntity):
             return None
 
     @property
-    def unit_of_measurement(self):
+    def native_unit_of_measurement(self):
         """Return the unit of measurement of this entity, if any."""
         return self._unit
 
