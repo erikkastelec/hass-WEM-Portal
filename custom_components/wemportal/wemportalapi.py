@@ -311,7 +311,9 @@ class WemPortalApi:
                     data[name]["value"] = 0.0
                 # Select entities
                 if data[name]["IsWriteable"]:
-                    if data[name]["DataType"] == -1:
+
+                    # NUMBER PLATFORM
+                    if data[name]["DataType"] == -1 or data[name]["DataType"] == 3:
                         self.data[name] = {
                             "friendlyName": data[name]["friendlyName"],
                             "ParameterID": value["ParameterID"],
@@ -334,6 +336,7 @@ class WemPortalApi:
                             ),
                             "step": 0.5,
                         }
+                    # SELECT PLATFORM
                     elif data[name]["DataType"] == 1:
                         self.data[name] = {
                             "friendlyName": data[name]["friendlyName"],
@@ -358,7 +361,7 @@ class WemPortalApi:
                                 ]["parameters"][value["ParameterID"]]["EnumValues"]
                             ],
                         }
-                    # switch platform
+                    # SWITCH PLATFORM
                     elif data[name]["DataType"] == 2:
                         try:
                             if (
