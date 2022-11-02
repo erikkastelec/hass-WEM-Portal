@@ -53,7 +53,7 @@ class WemPortalApi:
         else:
             if (
                 self.last_scraping_update is None
-                or (datetime.now() - self.last_scraping_update + timedelta(seconds=5))
+                or (datetime.now() - self.last_scraping_update + timedelta(seconds=10))
                 > self.scan_interval
             ):
                 self.fetch_webscraping_data()
@@ -547,7 +547,7 @@ class WemPortalSpider(Spider):
 
     def navigate_to_expert_page(self, response):
         # sleep for 1 seconds to get proper language and updated data
-        time.sleep(1)
+        time.sleep(3)
         # _LOGGER.debug("Print user page HTML: %s", response.text)
         if (
             response.url
@@ -600,7 +600,7 @@ class WemPortalSpider(Spider):
 
     def scrape_pages(self, response):
         # sleep for 1 seconds to get proper language and updated data
-        time.sleep(1)
+        time.sleep(3)
         # _LOGGER.debug("Print expert page HTML: %s", response.text)
         if self.authErrorFlag:
             yield {"authErrorFlag": True}
