@@ -549,8 +549,8 @@ class WemPortalSpider(Spider):
         )
 
     def navigate_to_expert_page(self, response):
-        # sleep for 1 seconds to get proper language and updated data
-        time.sleep(3)
+        # sleep for 5 seconds to get proper language and updated data
+        time.sleep(5)
         # _LOGGER.debug("Print user page HTML: %s", response.text)
         if (
             response.url
@@ -602,8 +602,8 @@ class WemPortalSpider(Spider):
         }
 
     def scrape_pages(self, response):
-        # sleep for 1 seconds to get proper language and updated data
-        time.sleep(3)
+        # sleep for 5 seconds to get proper language and updated data
+        time.sleep(5)
         # _LOGGER.debug("Print expert page HTML: %s", response.text)
         if self.authErrorFlag:
             yield {"authErrorFlag": True}
