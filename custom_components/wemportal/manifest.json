@@ -12,7 +12,8 @@
     "scrapyscript==1.1.*",
     "scrapy==2.7.*",
     "fuzzywuzzy==0.18.0",
-    "twisted<=22.10.0"
+    "twisted<=22.9.0",
+    "python-Levenshtein==0.20.*"
   ],
   "iot_class": "cloud_polling"
 }
