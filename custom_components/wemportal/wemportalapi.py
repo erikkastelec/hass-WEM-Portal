@@ -298,6 +298,7 @@ class WemPortalApi:
                 ][value["ParameterID"]]["EnumValues"]:
                     if value["StringValue"] in [
                         "off",
+                        "Aus",
                         "Label ist null",
                         "Label ist null ",
                     ]:
@@ -307,7 +308,7 @@ class WemPortalApi:
                             data[name]["value"] = float(value["StringValue"])
                         except ValueError:
                             data[name]["value"] = value["StringValue"]
-                if data[name]["value"] in ["off", "Label ist null", "Label ist null "]:
+                if data[name]["value"] in ["off", "Aus", "Label ist null", "Label ist null "]:
                     data[name]["value"] = 0.0
                 # Select entities
                 if data[name]["IsWriteable"]:
@@ -654,7 +655,7 @@ class WemPortalSpider(Spider):
                         value = ".".join(value.split(","))
                         value = float(value)
                     except ValueError:
-                        if value in ["off", "--", "Label ist null", "Label ist null "]:
+                        if value in ["off", "Aus", "--", "Label ist null", "Label ist null "]:
                             value = 0.0
 
                     icon_mapper = defaultdict(lambda: "mdi:flash")
