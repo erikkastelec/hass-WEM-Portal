@@ -135,9 +135,9 @@ class WemPortalApi:
         self.device_id = data["Devices"][0]["ID"]
         for module in data["Devices"][0]["Modules"]:
             self.modules[(module["Index"], module["Type"])] = {
-                "index": module["Index"],
-                "type": module["Type"],
-                "name": module["Name"],
+                "Index": module["Index"],
+                "Type": module["Type"],
+                "Name": module["Name"],
             }
 
     def get_parameters(self):
@@ -146,8 +146,8 @@ class WemPortalApi:
         for key, values in self.modules.items():
             data = {
                 "DeviceID": self.device_id,
-                "ModuleIndex": values["index"],
-                "ModuleType": values["type"],
+                "ModuleIndex": values["Index"],
+                "ModuleType": values["Type"],
             }
             response = self.session.post(
                 "https://www.wemportal.com/app/EventType/Read",
@@ -166,9 +166,9 @@ class WemPortalApi:
                 for parameter in response.json()["Parameters"]:
                     parameters[parameter["ParameterID"]] = parameter
                 if not parameters:
-                    delete_candidates.append((values["index"], values["type"]))
+                    delete_candidates.append((values["Index"], values["Type"]))
                 else:
-                    self.modules[(values["index"], values["type"])][
+                    self.modules[(values["Index"], values["Type"])][
                         "parameters"
                     ] = parameters
             except KeyError:
@@ -226,8 +226,8 @@ class WemPortalApi:
                 "DeviceID": self.device_id,
                 "Modules": [
                     {
-                        "ModuleIndex": module["index"],
-                        "ModuleType": module["type"],
+                        "ModuleIndex": module["Index"],
+                        "ModuleType": module["Type"],
                         "Parameters": [
                             {"ParameterID": parameter}
                             for parameter in module["parameters"].keys()
@@ -271,9 +271,13 @@ class WemPortalApi:
         for module in values["Modules"]:
             for value in module["Values"]:
 
-                name = self.modules[(module["ModuleIndex"], module["ModuleType"])][
-                    "parameters"
-                ][value["ParameterID"]]["Name"]
+                name = (
+                    self.modules[(module["ModuleIndex"], module["ModuleType"])]["Name"]
+                    + "-"
+                    + self.modules[(module["ModuleIndex"], module["ModuleType"])][
+                        "parameters"
+                    ][value["ParameterID"]]["ParameterID"]
+                )
 
                 data[name] = {
                     "friendlyName": self.translate(
@@ -308,7 +312,12 @@ class WemPortalApi:
                             data[name]["value"] = float(value["StringValue"])
                         except ValueError:
                             data[name]["value"] = value["StringValue"]
-                if data[name]["value"] in ["off", "Aus", "Label ist null", "Label ist null "]:
+                if data[name]["value"] in [
+                    "off",
+                    "Aus",
+                    "Label ist null",
+                    "Label ist null ",
+                ]:
                     data[name]["value"] = 0.0
                 # Select entities
                 if data[name]["IsWriteable"]:
@@ -335,8 +344,12 @@ class WemPortalApi:
                                     (module["ModuleIndex"], module["ModuleType"])
                                 ]["parameters"][value["ParameterID"]]["MaxValue"]
                             ),
-                            "step": 0.5,
                         }
+                        if data[name]["DataType"] == -1:
+                            self.data[name]["step"] = 0.5
+                        else:
+                            self.data[name]["step"] = 1
+
                     # SELECT PLATFORM
                     elif data[name]["DataType"] == 1:
                         self.data[name] = {
@@ -403,46 +416,51 @@ class WemPortalApi:
                 #             self.data[value["ParameterID"]]["value"] = entry["Name"]
                 #             break
 
-            for key in data.keys():
+            for key, value in data.items():
                 if key not in ["DeviceID", "Modules"]:
                     # Match only values, which are not writable (sensors)
-                    if not data[key]["IsWriteable"]:
+                    if not value["IsWriteable"]:
                         # Only when mode == both. Combines data from web and api
                         if self.mode == "both":
                             try:
-                                temp = self.scrapingMapper[key]
+                                temp = self.scrapingMapper[value["ParameterID"]]
                             except KeyError:
                                 for scraped_entity in self.data.keys():
+                                    scraped_entity_id = self.data[scraped_entity][
+                                        "ParameterID"
+                                    ]
                                     try:
                                         if (
                                             fuzz.ratio(
-                                                data[key]["friendlyName"],
-                                                scraped_entity.split("-")[1],
+                                                value["friendlyName"],
+                                                scraped_entity_id.split("-")[1],
                                             )
                                             >= 90
                                         ):
                                             try:
-                                                self.scrapingMapper[key].append(
-                                                    scraped_entity
-                                                )
+                                                self.scrapingMapper[
+                                                    value["ParameterID"]
+                                                ].append(scraped_entity_id)
                                             except KeyError:
-                                                self.scrapingMapper[key] = [
-                                                    scraped_entity
-                                                ]
+                                                self.scrapingMapper[
+                                                    value["ParameterID"]
+                                                ] = [scraped_entity_id]
                                     except IndexError:
                                         pass
                                 # Check if empty
                                 try:
-                                    temp = self.scrapingMapper[key]
+                                    temp = self.scrapingMapper[value["ParameterID"]]
                                 except KeyError:
-                                    self.scrapingMapper[key] = [
-                                        data[key]["friendlyName"]
+                                    self.scrapingMapper[value["ParameterID"]] = [
+                                        value["friendlyName"]
                                     ]
                             finally:
-                                for scraped_entity in self.scrapingMapper[key]:
+                                for scraped_entity in self.scrapingMapper[
+                                    value["ParameterID"]
+                                ]:
                                     try:
                                         self.data[scraped_entity] = {
-                                            "value": data[key]["value"],
+                                            "value": value["value"],
                                             "name": self.data[scraped_entity]["name"],
                                             "unit": self.data[scraped_entity]["unit"],
                                             "icon": self.data[scraped_entity]["icon"],
@@ -452,9 +470,9 @@ class WemPortalApi:
                                         }
                                     except KeyError:
                                         self.data[scraped_entity] = {
-                                            "value": data[key]["value"],
-                                            "unit": data[key]["unit"],
-                                            "icon": icon_mapper[data[key]["unit"]],
+                                            "value": value["value"],
+                                            "unit": value["unit"],
+                                            "icon": icon_mapper[value["unit"]],
                                             "friendlyName": scraped_entity,
                                             "name": scraped_entity,
                                             "ParameterID": scraped_entity,
@@ -462,16 +480,16 @@ class WemPortalApi:
                                         }
                         else:
                             self.data[key] = {
-                                "value": data[key]["value"],
-                                "ParameterID": data[key]["ParameterID"],
-                                "unit": data[key]["unit"],
-                                "icon": icon_mapper[data[key]["unit"]],
-                                "friendlyName": data[key]["friendlyName"],
+                                "value": value["value"],
+                                "ParameterID": value["ParameterID"],
+                                "unit": value["unit"],
+                                "icon": icon_mapper[value["unit"]],
+                                "friendlyName": value["friendlyName"],
                                 "platform": "sensor",
                             }
 
     def friendly_name_mapper(self, value):
-        friendlyNameDict = {
+        friendly_name_dict = {
             "pp_beginn": "party_beginn",
             "pp_ende": "party_ende",
             "pp_funktion": "party_funktion",
@@ -492,7 +510,7 @@ class WemPortalApi:
             "normal": "normaltemperatur",
         }
         try:
-            out = friendlyNameDict[value.casefold()]
+            out = friendly_name_dict[value.casefold()]
         except KeyError:
             out = value.casefold()
         return out
@@ -500,7 +518,7 @@ class WemPortalApi:
     def translate(self, language, value):
         # TODO: Implement support for other languages.
         value = value.lower()
-        translationDict = {
+        translation_dict = {
             "en": {
                 "außsentemperatur": "outside_temperature",
                 "aussentemperatur": "outside_temperature",
@@ -521,7 +539,7 @@ class WemPortalApi:
             }
         }
         try:
-            out = translationDict[language][value.casefold()]
+            out = translation_dict[language][value.casefold()]
         except KeyError:
             out = value.casefold()
         return out
@@ -655,7 +673,13 @@ class WemPortalSpider(Spider):
                         value = ".".join(value.split(","))
                         value = float(value)
                     except ValueError:
-                        if value in ["off", "Aus", "--", "Label ist null", "Label ist null "]:
+                        if value in [
+                            "off",
+                            "Aus",
+                            "--",
+                            "Label ist null",
+                            "Label ist null ",
+                        ]:
                             value = 0.0
 
                     icon_mapper = defaultdict(lambda: "mdi:flash")
