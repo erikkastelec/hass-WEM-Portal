@@ -681,6 +681,8 @@ class WemPortalSpider(Spider):
                             "Label ist null ",
                         ]:
                             value = 0.0
+                        else:
+                            unit = None
 
                     icon_mapper = defaultdict(lambda: "mdi:flash")
                     icon_mapper["°C"] = "mdi:thermometer"
