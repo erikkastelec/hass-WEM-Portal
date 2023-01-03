@@ -2,13 +2,13 @@
 Sensor platform for wemportal component
 """
 
-from homeassistant.components.sensor import (STATE_CLASS_MEASUREMENT,
-                                             STATE_CLASS_TOTAL_INCREASING,
-                                             SensorEntity)
+from homeassistant.components.sensor import (
+    SensorEntity,
+    SensorDeviceClass,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (DEVICE_CLASS_ENERGY, DEVICE_CLASS_POWER,
-                                 DEVICE_CLASS_POWER_FACTOR,
-                                 DEVICE_CLASS_TEMPERATURE)
+
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -17,10 +17,10 @@ from .const import _LOGGER, DOMAIN
 
 
 async def async_setup_platform(
-        hass: HomeAssistant,
-        config_entry: ConfigEntry,
-        async_add_entities: AddEntitiesCallback,
-        discovery_info=None,
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info=None,
 ):
     """Setup the Wem Portal sensors."""
 
@@ -103,13 +103,13 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
     def device_class(self):
         """Return the device_class of this entity."""
         if self._unit == "°C":
-            return DEVICE_CLASS_TEMPERATURE
+            return SensorDeviceClass.TEMPERATURE
         elif self._unit in ("kWh", "Wh"):
-            return DEVICE_CLASS_ENERGY
+            return SensorDeviceClass.ENERGY
         elif self._unit in ("kW", "W"):
-            return DEVICE_CLASS_POWER
+            return SensorDeviceClass.POWER
         elif self._unit == "%":
-            return DEVICE_CLASS_POWER_FACTOR
+            return SensorDeviceClass.POWER_FACTOR
         else:
             return None
 
@@ -117,9 +117,9 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
     def state_class(self):
         """Return the state class of this entity, if any."""
         if self._unit in ("°C", "kW", "W", "%"):
-            return STATE_CLASS_MEASUREMENT
+            return SensorStateClass.MEASUREMENT
         elif self._unit in ("kWh", "Wh"):
-            return STATE_CLASS_TOTAL_INCREASING
+            return SensorStateClass.TOTAL_INCREASING
         else:
             return None
 
