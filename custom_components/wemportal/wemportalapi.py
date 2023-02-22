@@ -548,7 +548,11 @@ class WemPortalApi:
 class WemPortalSpider(Spider):
     name = "WemPortalSpider"
     start_urls = START_URLS
-
+    
+    custom_settings = {
+        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
+    }
+    
     def __init__(self, username, password, **kw):
         self.username = username
         self.password = password
