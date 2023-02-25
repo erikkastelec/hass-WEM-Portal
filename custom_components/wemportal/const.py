@@ -1,6 +1,7 @@
 """ Constants for the WEM Portal Integration """
 import logging
 from typing import Final
+from enum import Enum
 
 _LOGGER = logging.getLogger("custom_components.wemportal")
 DOMAIN = "wemportal"
