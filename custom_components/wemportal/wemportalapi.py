@@ -13,9 +13,16 @@ import requests as reqs
 import scrapyscript
 from fuzzywuzzy import fuzz
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
-from scrapy import FormRequest, Spider
+from scrapy import FormRequest, Spider, Request
 
-from .const import _LOGGER, CONF_LANGUAGE, CONF_MODE, CONF_SCAN_INTERVAL_API, START_URLS
+from .const import (
+    _LOGGER,
+    CONF_LANGUAGE,
+    CONF_MODE,
+    CONF_SCAN_INTERVAL_API,
+    START_URLS,
+    AuthErrorFlag,
+)
 
 
 class WemPortalApi:
@@ -35,6 +42,7 @@ class WemPortalApi:
         self.device_id = None
         self.session = None
         self.modules = None
+        self.webscraping_cookie = {}
         self.last_scraping_update = None
         # Headers used for all API calls
         self.headers = {
@@ -65,7 +73,9 @@ class WemPortalApi:
 
     def fetch_webscraping_data(self):
         """Call spider to crawl WEM Portal"""
-        wemportal_job = scrapyscript.Job(WemPortalSpider, self.username, self.password)
+        wemportal_job = scrapyscript.Job(
+            WemPortalSpider, self.username, self.password, self.webscraping_cookie
+        )
         processor = scrapyscript.Processor(settings=None)
         try:
             self.data = processor.run([wemportal_job])[0]
@@ -75,13 +85,21 @@ class WemPortalApi:
                 "open an issue at https://github.com/erikkastelec/hass-WEM-Portal/issues"
             )
         try:
-            if self.data["authErrorFlag"]:
+            # Wrong credentials
+            if self.data["authErrorFlag"] == AuthErrorFlag.WRONG_CREDENTIALS:
                 _LOGGER.exception(
                     "AuthenticationError: Could not login with provided username and password. Check if "
                     "your config contains the right credentials"
                 )
+                self.webscraping_cookie = {}
+            # Session expired.
+            else:
+                self.webscraping_cookie = {}
+                pass
         except KeyError:
             """If authentication was successful"""
+            self.webscraping_cookie = self.data["cookie"]
+            del self.data["cookie"]
             pass
 
     def fetch_api_data(self):
@@ -215,8 +233,6 @@ class WemPortalApi:
             )
         if response.status_code != 200:
             _LOGGER.error("Error changing parameter %s value", parameter_id)
-            # _LOGGER.info("Error: %s", response.content)
-            # _LOGGER.info(response.__dict__)
 
     # Refresh data and retrieve new data
     def get_data(self):
@@ -545,53 +561,106 @@ class WemPortalApi:
         return out
 
 
+from scrapy.core.downloader.handlers.http11 import HTTP11DownloadHandler
+
+START_URLS = ["https://www.wemportal.com/Web/login.aspx"]
+
+
 class WemPortalSpider(Spider):
     name = "WemPortalSpider"
     start_urls = START_URLS
-    
+
     custom_settings = {
-        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
+        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
+        "LOG_LEVEL": "ERROR",
     }
-    
-    def __init__(self, username, password, **kw):
+
+    def __init__(self, username, password, cookie=None, **kw):
         self.username = username
         self.password = password
-        self.authErrorFlag = False
+        self.authErrorFlag = 0
+        self.cookie = cookie if cookie else {}
+        self.retry = None
         super().__init__(**kw)
 
-    def parse(self, response):
-        """Login to WEM Portal"""
-        return FormRequest.from_response(
-            response,
-            formdata={
-                "ctl00$content$tbxUserName": self.username,
-                "ctl00$content$tbxPassword": self.password,
-                "Accept-Language": "en-US,en;q=0.5",
-            },
-            callback=self.navigate_to_expert_page,
-        )
+    def start_requests(self):
 
-    def navigate_to_expert_page(self, response):
-        # sleep for 5 seconds to get proper language and updated data
-        time.sleep(5)
-        # _LOGGER.debug("Print user page HTML: %s", response.text)
+        # Check if we have a cookie/session. Skip to main website if we do.
+        if ".ASPXAUTH" in self.cookie:
+            return [
+                Request(
+                    "https://www.wemportal.com/Web/Default.aspx",
+                    headers={
+                        "Accept-Language": "en-US,en;q=0.5",
+                        "Connection": "keep-alive",
+                    },
+                    cookies=self.cookie,
+                    callback=self.check_valid_login,
+                )
+            ]
+        return [
+            Request("https://www.wemportal.com/Web/Login.aspx", callback=self.login)
+        ]
+
+    def login(self, response):
+        return [
+            FormRequest.from_response(
+                response,
+                formdata={
+                    "ctl00$content$tbxUserName": self.username,
+                    "ctl00$content$tbxPassword": self.password,
+                    "Accept-Language": "en-US,en;q=0.5",
+                },
+                callback=self.check_valid_login,
+            )
+        ]
+
+    # Extract cookies from response.request.headers and convert them to dict
+    def get_cookies(self, response):
+        cookies = {}
+        response_cookies = response.request.headers.getlist("Cookie")
+        if len(response_cookies) > 0:
+            for cookie_entry in response_cookies[0].decode("utf-8").split("; "):
+                parts = cookie_entry.split("=")
+                if len(parts) == 2:
+                    cookie_name, cookie_value = parts
+                    cookies[cookie_name] = cookie_value
+            self.cookie = cookies
+
+    # Check if login was successful. If not, return authErrorFlag
+    def check_valid_login(self, response):
         if (
-            response.url
-            == "https://www.wemportal.com/Web/login.aspx?AspxAutoDetectCookieSupport=1"
+            response.url.lower() == "https://www.wemportal.com/Web/Login.aspx".lower()
+            and not self.retry
         ):
-            _LOGGER.debug("Authentication failed")
-            self.authErrorFlag = True
+            # TODO: Implement retry logic. If session expires
+            self.authErrorFlag = 2
             form_data = {}
-        else:
-            _LOGGER.debug("Authentication successful")
-            form_data = self.generate_form_data(response)
-            _LOGGER.debug("Form data processed")
+            return {"authErrorFlag": 2}
+
+        elif (
+            response.url.lower()
+            == "https://www.wemportal.com/Web/Login.aspx?AspxAutoDetectCookieSupport=1".lower()
+            or response.status != 200
+        ):
+            self.authErrorFlag = 1
+            form_data = {}
+            return {"authErrorFlag": 1}
+
+        self.retry = None
+        # Wait 2 seconds so everything loads
+        time.sleep(2)
+        form_data = self.generate_form_data(response)
+        self.get_cookies(response)
+        cookie_string = ";".join(
+            [f"{key}={value}" for key, value in self.cookie.items()]
+        )
         return FormRequest(
             url="https://www.wemportal.com/Web/default.aspx",
             formdata=form_data,
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
-                "Cookie": response.request.headers.getlist("Cookie")[0].decode("utf-8"),
+                "Cookie": cookie_string,
                 "Accept-Language": "en-US,en;q=0.5",
             },
             method="POST",
@@ -627,10 +696,9 @@ class WemPortalSpider(Spider):
     def scrape_pages(self, response):
         # sleep for 5 seconds to get proper language and updated data
         time.sleep(5)
-        # _LOGGER.debug("Print expert page HTML: %s", response.text)
-        if self.authErrorFlag:
-            yield {"authErrorFlag": True}
-        _LOGGER.debug("Scraping page")
+        _LOGGER.debug("Print expert page HTML: %s", response.text)
+        if self.authErrorFlag != 0:
+            yield {"authErrorFlag": self.authErrorFlag}
         output = {}
         for i, div in enumerate(
             response.xpath(
@@ -702,5 +770,6 @@ class WemPortalSpider(Spider):
                     }
                 except IndexError:
                     continue
-
+        output["cookie"] = self.cookie
+        self.data = output
         yield output

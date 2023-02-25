@@ -12,3 +12,7 @@ CONF_LANGUAGE: Final = "language"
 CONF_MODE: Final = "mode"
 PLATFORMS = ["sensor", "number", "select", "switch"]
 REFRESH_WAIT_TIME: int = 360
+class AuthErrorFlag(Enum):
+    OK = 0
+    WRONG_CREDENTIALS = 1
+    SESSION_EXPIRED = 2
