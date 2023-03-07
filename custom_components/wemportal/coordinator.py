@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import async_timeout
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-
+from homeassistant.helpers.update_coordinator import (
+    DataUpdateCoordinator,
+    UpdateFailed,
+)
+from .exceptions import WemPortalError
 from .const import _LOGGER, DEFAULT_TIMEOUT
 from .wemportalapi import WemPortalApi
 
@@ -26,4 +29,8 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         """Fetch data from the wemportal api"""
         async with async_timeout.timeout(DEFAULT_TIMEOUT):
-            return await self.hass.async_add_executor_job(self.api.fetch_data)
+            try:
+                return await self.hass.async_add_executor_job(self.api.fetch_data)
+            except WemPortalError as exc:
+                _LOGGER.error("Error fetching data from wemportal", exc_info=exc)
+                raise UpdateFailed from exc

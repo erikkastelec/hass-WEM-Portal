@@ -27,16 +27,16 @@ This is how your custom_components directory should look like:
 custom_components
 ├── wemportal
 │   ├── __init__.py
-│   ├── const.py
-│   ├── manifest.json
-│   ├── coordinator.py
-│   ├── select.py
-│   ├── number.py
-│   ├── sensor.py
+│   ├── ...
+│   ├── ...
+│   ├── ...
 │   └── wemportalapi.py  
 ```
 
 ## Configuration
+
+Integration must be configured in Home Assistant frontend: Go to `Settings > Devices&Services `, click on ` Add integration ` button and search for `Weishaupt WEM Portal`.
+
 
 Configuration variables:
 
@@ -53,18 +53,6 @@ Configuration variables:
   mobile API. Option `web` gets only the data on the website, while option `both` queries website and api and provides
   all the available data from both sources.
 
-Add the following to your `configuration.yaml` file:
-
-```yaml
-# Example configuration.yaml entry
-wemportal:
-  #scan_interval: 1800
-  #api_scan_interval: 300
-  #language: en
-  #mode: api
-  username: your_username
-  password: your_password
-```
 
 ## Troubleshooting
 Please set your logging for the custom_component to debug:

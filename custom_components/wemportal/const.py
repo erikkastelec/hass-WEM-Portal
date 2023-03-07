@@ -1,7 +1,6 @@
 """ Constants for the WEM Portal Integration """
 import logging
 from typing import Final
-from enum import Enum
 
 _LOGGER = logging.getLogger("custom_components.wemportal")
 DOMAIN = "wemportal"
@@ -13,7 +12,6 @@ CONF_LANGUAGE: Final = "language"
 CONF_MODE: Final = "mode"
 PLATFORMS = ["sensor", "number", "select", "switch"]
 REFRESH_WAIT_TIME: int = 360
-class AuthErrorFlag(Enum):
-    OK = 0
-    WRONG_CREDENTIALS = 1
-    SESSION_EXPIRED = 2
+DATA_GATHERING_ERROR: Final = "An error occurred while gathering parameters data. \
+                    This issue should resolve by itself. If this problem persists, \
+                    open an issue at https://github.com/erikkastelec/hass-WEM-Portal/issues "

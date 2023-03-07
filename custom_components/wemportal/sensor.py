@@ -10,10 +10,12 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import _LOGGER, DOMAIN
+from . import get_wemportal_unique_id
 
 
 async def async_setup_platform(
@@ -22,31 +24,76 @@ async def async_setup_platform(
     async_add_entities: AddEntitiesCallback,
     discovery_info=None,
 ):
-    """Setup the Wem Portal sensors."""
+    """Setup the Wem Portal sensor."""
 
     coordinator = hass.data[DOMAIN]["coordinator"]
-
     entities: list[WemPortalSensor] = []
-    for unique_id, values in coordinator.data.items():
-        if values["platform"] == "sensor":
-            entities.append(WemPortalSensor(coordinator, unique_id, values))
+    for device_id, entity_data in coordinator.data.items():
+        for unique_id, values in entity_data.items():
+            if values["platform"] == "sensor":
+                entities.append(
+                    WemPortalSensor(
+                        coordinator, config_entry, device_id, unique_id, values
+                    )
+                )
 
     async_add_entities(entities)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Sensor entry setup."""
+
+    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
+    entities: list[WemPortalSensor] = []
+    for device_id, entity_data in coordinator.data.items():
+        for unique_id, values in entity_data.items():
+            if values["platform"] == "sensor":
+                entities.append(
+                    WemPortalSensor(
+                        coordinator, config_entry, device_id, unique_id, values
+                    )
+                )
+    try:
+        async_add_entities(entities)
+    except Exception as e:
+        print(e)
 
 
 class WemPortalSensor(CoordinatorEntity, SensorEntity):
     """Representation of a WEM Portal Sensor."""
 
-    def __init__(self, coordinator, _unique_id, entity_data):
+    def __init__(
+        self, coordinator, config_entry: ConfigEntry, device_id, _unique_id, entity_data
+    ):
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._last_updated = None
+        self._config_entry = config_entry
+        self._device_id = device_id
         self._name = _unique_id
-        self._unique_id = _unique_id
+        self._unique_id = get_wemportal_unique_id(
+            self._config_entry.entry_id, str(self._device_id), str(self._name)
+        )
         self._parameter_id = entity_data["ParameterID"]
         self._icon = entity_data["icon"]
         self._unit = entity_data["unit"]
         self._state = self.state
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Get device information."""
+        return {
+            "identifiers": {
+                (DOMAIN, f"{self._config_entry.entry_id}:{str(self._device_id)}")
+            },
+            "via_device": (DOMAIN, self._config_entry.entry_id),
+            "name": str(self._device_id),
+            "manufacturer": "Weishaupt",
+        }
 
     @property
     def should_poll(self):
@@ -85,7 +132,7 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
     def state(self):
         """Return the state of the sensor."""
         try:
-            state = self.coordinator.data[self._unique_id]["value"]
+            state = self.coordinator.data[self._device_id][self._name]["value"]
             if state:
                 return state
             return 0

@@ -7,24 +7,51 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-
+from . import get_wemportal_unique_id
 from .const import _LOGGER, DOMAIN
+from homeassistant.helpers.entity import DeviceInfo
 
 
 async def async_setup_platform(
-        hass: HomeAssistant,
-        config_entry: ConfigEntry,
-        async_add_entities: AddEntitiesCallback,
-        discovery_info=None,
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+    discovery_info=None,
 ):
-    """Setup the Wem Portal sensors."""
+    """Setup the Wem Portal number."""
 
     coordinator = hass.data[DOMAIN]["coordinator"]
 
     entities: list[WemPortalNumber] = []
-    for unique_id, values in coordinator.data.items():
-        if values["platform"] == "number":
-            entities.append(WemPortalNumber(coordinator, unique_id, values))
+    for device_id, entity_data in coordinator.data.items():
+        for unique_id, values in entity_data.items():
+            if values["platform"] == "number":
+                entities.append(
+                    WemPortalNumber(
+                        coordinator, config_entry, device_id, unique_id, values
+                    )
+                )
+
+    async_add_entities(entities)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Number entry setup."""
+
+    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
+    entities: list[WemPortalNumber] = []
+    for device_id, entity_data in coordinator.data.items():
+        for unique_id, values in entity_data.items():
+            if values["platform"] == "number":
+                entities.append(
+                    WemPortalNumber(
+                        coordinator, config_entry, device_id, unique_id, values
+                    )
+                )
 
     async_add_entities(entities)
 
@@ -32,13 +59,19 @@ async def async_setup_platform(
 class WemPortalNumber(CoordinatorEntity, NumberEntity):
     """Representation of a WEM Portal number."""
 
-    def __init__(self, coordinator, _unique_id, entity_data):
+    def __init__(
+        self, coordinator, config_entry: ConfigEntry, device_id, _unique_id, entity_data
+    ):
         """Initialize the sensor."""
         super().__init__(coordinator)
-        self._last_updated = None
+        self._config_entry = config_entry
+        self._device_id = device_id
         self._name = _unique_id
+        self._unique_id = get_wemportal_unique_id(
+            self._config_entry.entry_id, str(self._device_id), str(self._name)
+        )
+        self._last_updated = None
         self._parameter_id = entity_data["ParameterID"]
-        self._unique_id = _unique_id
         self._icon = entity_data["icon"]
         self._unit = entity_data["unit"]
         self._state = self.state
@@ -52,14 +85,27 @@ class WemPortalNumber(CoordinatorEntity, NumberEntity):
         """Update the current value."""
         await self.hass.async_add_executor_job(
             self.coordinator.api.change_value,
+            self._device_id,
             self._parameter_id,
             self._module_index,
             self._module_type,
             value,
         )
         self._state = value
-        self.coordinator.data[self._unique_id]["value"] = value
+        self.coordinator.data[self._device_id][self._name]["value"] = value
         self.async_write_ha_state()
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Get device information."""
+        return {
+            "identifiers": {
+                (DOMAIN, f"{self._config_entry.entry_id}:{str(self._device_id)}")
+            },
+            "via_device": (DOMAIN, self._config_entry.entry_id),
+            "name": str(self._device_id),
+            "manufacturer": "Weishaupt",
+        }
 
     @property
     def should_poll(self):
@@ -98,7 +144,7 @@ class WemPortalNumber(CoordinatorEntity, NumberEntity):
     def state(self):
         """Return the state of the sensor."""
         try:
-            state = self.coordinator.data[self._unique_id]["value"]
+            state = self.coordinator.data[self._device_id][self._name]["value"]
             if state:
                 return state
             return 0
