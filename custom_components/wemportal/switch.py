@@ -137,11 +137,9 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
 
     async def async_added_to_hass(self):
         """When entity is added to hass."""
-        self.coordinator.async_add_listener(self.async_write_ha_state)
-
-    async def async_will_remove_from_hass(self):
-        """When entity will be removed from hass."""
-        self.coordinator.async_remove_listener(self.async_write_ha_state)
+        self.async_on_remove(
+            self.coordinator.async_add_listener(self.async_write_ha_state)
+        )
 
     @property
     def name(self):
@@ -175,16 +173,6 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
             _LOGGER.error("Can't find %s", self._unique_id)
             _LOGGER.debug("Sensor data %s", self.coordinator.data)
             return None
-
-    # @property
-    # def state_class(self):
-    #     """Return the state class of this entity, if any."""
-    #     if self._unit in ("°C", "kW", "W", "%"):
-    #         return STATE_CLASS_MEASUREMENT
-    #     elif self._unit in ("kWh", "Wh"):
-    #         return STATE_CLASS_TOTAL_INCREASING
-    #     else:
-    #         return None
 
     @property
     def device_class(self):

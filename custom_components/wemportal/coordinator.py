@@ -15,7 +15,7 @@ from .wemportalapi import WemPortalApi
 class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
     """DataUpdateCoordinator for wemportal component"""
 
-    def __init__(self, hass: HomeAssistant, api: WemPortalApi, update_interval):
+    def __init__(self, hass: HomeAssistant, api: WemPortalApi, update_interval) -> None:
         """Initialize DataUpdateCoordinator for the wemportal component"""
         super().__init__(
             hass,

@@ -30,16 +30,9 @@ DATA_SCHEMA = vol.Schema(
 
 async def validate_input(hass: core.HomeAssistant, data):
     """Validate the user input allows us to connect."""
-    og_data = data
-    # Populate with default values
-    # Should be fixed, but for now, this should work.
-    data[CONF_MODE] = "api"
-    data[CONF_LANGUAGE] = "en"
-    data[CONF_SCAN_INTERVAL_API] = 300
-    data[CONF_SCAN_INTERVAL] = 1800
 
     # Create API object
-    api = WemPortalApi(data)
+    api = WemPortalApi(data[CONF_USERNAME], data[CONF_PASSWORD])
 
     # Try to login
     try:
@@ -49,13 +42,13 @@ async def validate_input(hass: core.HomeAssistant, data):
     except UnknownAuthError:
         raise CannotConnect from UnknownAuthError
 
-    return og_data
+    return data
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for kmtronic."""
+    """Handle a config flow for wemportal."""
 
-    VERSION = 1
+    VERSION = 2
 
     @staticmethod
     @callback
@@ -117,13 +110,23 @@ class WemportalOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Optional(
-                        CONF_SCAN_INTERVAL, default=1800
+                        CONF_SCAN_INTERVAL,
+                        default=self.config_entry.options.get(CONF_SCAN_INTERVAL, 1800),
                     ): config_validation.positive_int,
                     vol.Optional(
-                        CONF_SCAN_INTERVAL_API, default=300
+                        CONF_SCAN_INTERVAL_API,
+                        default=self.config_entry.options.get(
+                            CONF_SCAN_INTERVAL_API, 300
+                        ),
                     ): config_validation.positive_int,
-                    vol.Optional(CONF_LANGUAGE, default="en"): config_validation.string,
-                    vol.Optional(CONF_MODE, default="api"): config_validation.string,
+                    vol.Optional(
+                        CONF_LANGUAGE,
+                        default=self.config_entry.options.get(CONF_LANGUAGE, "en"),
+                    ): config_validation.string,
+                    vol.Optional(
+                        CONF_MODE,
+                        default=self.config_entry.options.get(CONF_MODE, "api"),
+                    ): config_validation.string,
                 }
             ),
         )

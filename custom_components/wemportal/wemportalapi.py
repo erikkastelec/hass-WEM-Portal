@@ -29,25 +29,38 @@ from .const import (
     CONF_SCAN_INTERVAL_API,
     START_URLS,
     DATA_GATHERING_ERROR,
+    DEFAULT_CONF_LANGUAGE_VALUE,
+    DEFAULT_CONF_MODE_VALUE,
+    DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
+    DEFAULT_CONF_SCAN_INTERVAL_VALUE,
 )
 
 
 class WemPortalApi:
     """Wrapper class for Weishaupt WEM Portal"""
 
-    def __init__(self, config):
+    def __init__(self, username, password, config={}):
         self.data = {}
-        self.username = config.get(CONF_USERNAME)
-        self.password = config.get(CONF_PASSWORD)
-        self.mode = config.get(CONF_MODE)
+        self.username = username
+        self.password = password
+        self.mode = config.get(CONF_MODE, DEFAULT_CONF_MODE_VALUE)
         self.update_interval = timedelta(
             seconds=min(
-                config.get(CONF_SCAN_INTERVAL), config.get(CONF_SCAN_INTERVAL_API)
+                config.get(CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE),
+                config.get(
+                    CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
+                ),
             )
         )
-        self.scan_interval = timedelta(seconds=config.get(CONF_SCAN_INTERVAL))
-        self.scan_interval_api = timedelta(seconds=config.get(CONF_SCAN_INTERVAL_API))
-        self.language = config.get(CONF_LANGUAGE)
+        self.scan_interval = timedelta(
+            seconds=config.get(CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE)
+        )
+        self.scan_interval_api = timedelta(
+            seconds=config.get(
+                CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
+            )
+        )
+        self.language = config.get(CONF_LANGUAGE, DEFAULT_CONF_LANGUAGE_VALUE)
         self.session = None
         self.modules = None
         self.webscraping_cookie = {}
@@ -69,7 +82,7 @@ class WemPortalApi:
                 self.get_devices()
                 self.get_parameters()
             if self.mode == "web":
-                self.fetch_webscraping_data()
+                self.data[next(iter(self.data), "0000")] = self.fetch_webscraping_data()
             elif self.mode == "api":
                 self.get_data()
             else:
@@ -124,7 +137,6 @@ class WemPortalApi:
         return data
 
     def api_login(self):
-
         payload = {
             "Name": self.username,
             "PasswordUTF8": self.password,
@@ -318,7 +330,6 @@ class WemPortalApi:
             icon_mapper["°C"] = "mdi:thermometer"
             for module in values["Modules"]:
                 for value in module["Values"]:
-
                     name = (
                         self.modules[device_id][
                             (module["ModuleIndex"], module["ModuleType"])
@@ -372,7 +383,6 @@ class WemPortalApi:
                         data[name]["value"] = 0.0
                     # Select entities
                     if data[name]["IsWriteable"]:
-
                         # NUMBER PLATFORM
                         if data[name]["DataType"] == -1 or data[name]["DataType"] == 3:
                             self.data[device_id][name] = {
@@ -633,7 +643,6 @@ class WemPortalSpider(Spider):
         super().__init__(**kw)
 
     def start_requests(self):
-
         # Check if we have a cookie/session. Skip to main website if we do.
         if ".ASPXAUTH" in self.cookie:
             return [

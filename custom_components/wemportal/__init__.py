@@ -13,30 +13,19 @@ from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.config_entries import ConfigEntry
-from .const import CONF_LANGUAGE, CONF_MODE, CONF_SCAN_INTERVAL_API, DOMAIN, PLATFORMS
+from .const import (
+    CONF_LANGUAGE,
+    CONF_MODE,
+    CONF_SCAN_INTERVAL_API,
+    DOMAIN,
+    PLATFORMS,
+    _LOGGER,
+    DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
+    DEFAULT_CONF_SCAN_INTERVAL_VALUE,
+)
 from .coordinator import WemPortalDataUpdateCoordinator
 from .wemportalapi import WemPortalApi
-
-
-# CONFIG_SCHEMA = vol.Schema(
-#     {
-#         DOMAIN: vol.Schema(
-#             {
-#                 vol.Optional(
-#                     CONF_SCAN_INTERVAL, default=timedelta(minutes=30)
-#                 ): config_validation.time_period,
-#                 vol.Optional(
-#                     CONF_SCAN_INTERVAL_API, default=timedelta(minutes=5)
-#                 ): config_validation.time_period,
-#                 vol.Optional(CONF_LANGUAGE, default="en"): config_validation.string,
-#                 vol.Optional(CONF_MODE, default="api"): config_validation.string,
-#                 vol.Required(CONF_USERNAME): config_validation.string,
-#                 vol.Required(CONF_PASSWORD): config_validation.string,
-#             }
-#         )
-#     },
-#     extra=vol.ALLOW_EXTRA,
-# )
+import homeassistant.helpers.entity_registry as entity_registry
 
 
 def get_wemportal_unique_id(config_entry_id: str, device_id: str, name: str):
@@ -50,50 +39,64 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-#     # Set proper update_interval, based on selected mode
-#     if config[DOMAIN].get(CONF_MODE) == "web":
-#         update_interval = config[DOMAIN].get(CONF_SCAN_INTERVAL)
+# Migrate values from previous versions
+async def migrate_unique_ids(
+    hass: HomeAssistant, config_entry: ConfigEntry, coordinator
+):
+    er = await entity_registry.async_get_registry(hass)
+    # Do migration for first device if we have multiple
+    device_id = list(coordinator.data.keys())[0]
+    data = coordinator.data[device_id]
 
-#     elif config[DOMAIN].get(CONF_MODE) == "api":
-#         update_interval = config[DOMAIN].get(CONF_SCAN_INTERVAL_API)
-#     else:
-#         update_interval = min(
-#             config[DOMAIN].get(CONF_SCAN_INTERVAL),
-#             config[DOMAIN].get(CONF_SCAN_INTERVAL_API),
-#         )
-#     # Creatie API object
-#     api = WemPortalApi(config[DOMAIN])
-#     # Create custom coordinator
-#     coordinator = WemPortalDataUpdateCoordinator(hass, api, update_interval)
-
-#     hass.data[DOMAIN] = {
-#         "api": api,
-#         "coordinator": coordinator,
-#     }
-
-#     await coordinator.async_config_entry_first_refresh()
-
-#     # Initialize platforms
-#     for platform in PLATFORMS:
-#         hass.helpers.discovery.load_platform(platform, DOMAIN, {}, config)
-#     return True
+    change = False
+    for unique_id, values in data.items():
+        name_id = er.async_get_entity_id(values["platform"], DOMAIN, unique_id)
+        new_id = get_wemportal_unique_id(config_entry.entry_id, device_id, unique_id)
+        if name_id is not None:
+            _LOGGER.info(
+                f"Found entity with old id ({name_id}). Updating to new unique_id ({new_id})."
+            )
+            _LOGGER.error(unique_id)
+            # check if there already is a new one
+            new_entity_id = er.async_get_entity_id(values["platform"], DOMAIN, new_id)
+            if new_entity_id is not None:
+                _LOGGER.info(
+                    "Found entity with old id and an entity with a new unique_id. Preserving old entity..."
+                )
+                er.async_remove(new_entity_id)
+            er.async_update_entity(
+                name_id,
+                new_unique_id=new_id,
+            )
+            change = True
+    if change:
+        await coordinator.async_config_entry_first_refresh()
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the wemportal component."""
     # Set proper update_interval, based on selected mode
-    if entry.data.get(CONF_MODE) == "web":
-        update_interval = entry.data.get(CONF_SCAN_INTERVAL)
+    if entry.options.get(CONF_MODE) == "web":
+        update_interval = entry.options.get(
+            CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE
+        )
 
-    elif entry.data.get(CONF_MODE) == "api":
-        update_interval = entry.data.get(CONF_SCAN_INTERVAL_API)
+    elif entry.options.get(CONF_MODE) == "api":
+        update_interval = entry.options.get(
+            CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
+        )
     else:
         update_interval = min(
-            entry.data.get(CONF_SCAN_INTERVAL),
-            entry.data.get(CONF_SCAN_INTERVAL_API),
+            entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE),
+            entry.options.get(
+                CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
+            ),
         )
     # Creatie API object
-    api = WemPortalApi(entry.data)
+
+    api = WemPortalApi(
+        entry.data.get(CONF_USERNAME), entry.data.get(CONF_PASSWORD), entry.options
+    )
     # Create custom coordinator
     coordinator = WemPortalDataUpdateCoordinator(
         hass, api, timedelta(seconds=update_interval)
@@ -101,28 +104,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await coordinator.async_config_entry_first_refresh()
 
+    try:
+        version = entry.version
+        if version < 2:
+            await migrate_unique_ids(hass, entry, coordinator)
+    except Exception:
+        await migrate_unique_ids(hass, entry, coordinator)
+
     hass.data[DOMAIN][entry.entry_id] = {
         "api": api,
         # "config": entry.data,
         "coordinator": coordinator,
     }
 
-    # TODO: Implement removal of outdated entries
-    # current_devices: set[tuple[str, str]] = set({(DOMAIN, entry.entry_id)})
-
-    # device_registry = dr.async_get(hass)
-    # for device_entry in dr.async_entries_for_config_entry(
-    #     device_registry, entry.entry_id
-    # ):
-    #     for identifier in device_entry.identifiers:
-    #         if identifier in current_devices:
-    #             break
-    #     else:
-    #         device_registry.async_remove_device(device_entry.id)
-
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     return True
 
 
