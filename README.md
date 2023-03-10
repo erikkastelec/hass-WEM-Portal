@@ -37,13 +37,14 @@ custom_components
 
 Integration must be configured in Home Assistant frontend: Go to `Settings > Devices&Services `, click on ` Add integration ` button and search for `Weishaupt WEM Portal`.
 
+After Adding the integration, you can click `CONFIGURE` button to edit the default settings. Make sure to read what each setting does below.
 
 Configuration variables:
 
 - `username`: Email address used for logging into WEM Portal
 - `password`: Password used for logging into WEM Portal
 - `scan_interval (Optional)`: Defines update frequency of web scraping. Optional and in seconds (defaults to 30 min).
-  Setting update frequency bellow 15 min is not recommended.
+  Setting update frequency below 15 min is not recommended.
 - `api_scan_interval (Optional)`: Defines update frequency for API data fetching. Optional and in seconds (defaults to 5
   min, should not be lower than 3 min).
 - `language (

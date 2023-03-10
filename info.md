@@ -14,6 +14,8 @@ Full restart of the Home Assistant is required. Restarting from GUI won't work, 
 
 Integration must be configured in Home Assistant frontend: Go to `Settings > Devices&Services `, click on ` Add integration ` button and search for `Weishaupt WEM Portal`.
 
+After Adding the integration, you can click `CONFIGURE` button to edit the default settings. Make sure to read what each setting does below.
+
 Configuration variables:
 
 - `username`: Email address used for logging into WEM Portal
