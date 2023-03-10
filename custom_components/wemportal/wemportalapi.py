@@ -163,7 +163,10 @@ class WemPortalApi:
                     f"Authentication Error: Encountered an unknown authentication error. Received response code: {response.status_code}, response: {response.content}"
                 ) from exc
 
-    def make_api_call(self, url: str, headers=None, data=None) -> reqs.Response:
+    def make_api_call(
+        self, url: str, headers=None, data=None, login_retry=False, delay=1
+    ) -> reqs.Response:
+        response = None
         try:
             if not headers:
                 headers = self.headers
@@ -175,23 +178,31 @@ class WemPortalApi:
                     url, headers=headers, data=json.dumps(data)
                 )
             response.raise_for_status()
-        except reqs.exceptions.HTTPError as exc:
-            if response.status_code == 401:
-                self.api_login()
-                if not headers:
-                    headers = self.headers
-                if not data:
-                    response = self.session.get(url, headers=headers)
-                else:
-                    headers["Content-Type"] = "application/json"
-                    response = self.session.post(
-                        url, headers=headers, data=json.dumps(data)
-                    )
-                response.raise_for_status()
-            else:
-                raise WemPortalError(DATA_GATHERING_ERROR) from exc
         except Exception as exc:
-            raise WemPortalError(DATA_GATHERING_ERROR) from exc
+            if response.status_code == 401 and not login_retry:
+                self.api_login()
+                headers = headers or self.headers
+                time.sleep(delay)
+                response = self.make_api_call(
+                    url,
+                    headers=headers,
+                    data=data,
+                    login_retry=True,
+                    delay=delay,
+                )
+            else:
+                try:
+                    response_data = response.json()
+                    # Status we get back from server
+                    server_status = response_data["Status"]
+                    server_message = response_data["Message"]
+                    raise WemPortalError(
+                        f"{DATA_GATHERING_ERROR} Server returned status code: {server_status} and message: {server_message}"
+                    ) from exc
+                # If there is no Status or Message in response
+                except KeyError:
+                    raise WemPortalError(DATA_GATHERING_ERROR) from exc
+
         return response
 
     def get_devices(self):

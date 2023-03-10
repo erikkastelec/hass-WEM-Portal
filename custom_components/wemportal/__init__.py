@@ -104,19 +104,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await coordinator.async_config_entry_first_refresh()
 
-    try:
-        version = entry.version
-        if version < 2:
-            await migrate_unique_ids(hass, entry, coordinator)
-    except Exception:
-        await migrate_unique_ids(hass, entry, coordinator)
+    # try:
+    #     version = entry.version
+    #     if version < 2:
+    #         await migrate_unique_ids(hass, entry, coordinator)
+    # except Exception:
+    #     await migrate_unique_ids(hass, entry, coordinator)
+
+    # Is there an on_update function that we can add listener to?
+    _LOGGER.debug("Migrating entity names for wemportal")
+    await migrate_unique_ids(hass, entry, coordinator)
 
     hass.data[DOMAIN][entry.entry_id] = {
         "api": api,
         # "config": entry.data,
         "coordinator": coordinator,
     }
-
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
@@ -129,6 +132,10 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 
 async def _async_entry_updated(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
     """Handle entry updates."""
+    _LOGGER.debug("Migrating entity names for wemportal because of config entry update")
+    await migrate_unique_ids(
+        hass, config_entry, hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
+    )
     await hass.config_entries.async_reload(config_entry.entry_id)
 
 
