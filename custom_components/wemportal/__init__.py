@@ -43,7 +43,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def migrate_unique_ids(
     hass: HomeAssistant, config_entry: ConfigEntry, coordinator
 ):
-    er = await entity_registry.async_get_registry(hass)
+    er = await entity_registry.async_get(hass)
     # Do migration for first device if we have multiple
     device_id = list(coordinator.data.keys())[0]
     data = coordinator.data[device_id]
