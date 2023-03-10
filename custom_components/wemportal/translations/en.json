@@ -14,17 +14,17 @@
         "unknown": "Unexpected error"
       },
       "abort": {
-        "already_configured": "Acconut is already configured"
+        "already_configured": "Account is already configured"
       }
     },
     "options": {
       "step": {
         "init": {
           "data": {
-            "scan_interval": "Web scraping interval (default = 1800 sec)%]",
-            "api_scan_interval": "Api scan interval (default = 300 sec)%]",
+            "scan_interval": "Web scraping interval (default = 1800 sec)",
+            "api_scan_interval": "Api scan interval (default = 300 sec)",
             "language": "Language (default = en)",
-            "mode": "Mode(default = 'api')"
+            "mode": "Mode(default = api)"
           }
         }
       }
