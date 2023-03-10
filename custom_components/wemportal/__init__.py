@@ -56,7 +56,6 @@ async def migrate_unique_ids(
             _LOGGER.info(
                 f"Found entity with old id ({name_id}). Updating to new unique_id ({new_id})."
             )
-            _LOGGER.error(unique_id)
             # check if there already is a new one
             new_entity_id = er.async_get_entity_id(values["platform"], DOMAIN, new_id)
             if new_entity_id is not None:
@@ -112,7 +111,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     #     await migrate_unique_ids(hass, entry, coordinator)
 
     # Is there an on_update function that we can add listener to?
-    _LOGGER.debug("Migrating entity names for wemportal")
+    _LOGGER.info("Migrating entity names for wemportal")
     await migrate_unique_ids(hass, entry, coordinator)
 
     hass.data[DOMAIN][entry.entry_id] = {
@@ -132,7 +131,7 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
 
 async def _async_entry_updated(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
     """Handle entry updates."""
-    _LOGGER.debug("Migrating entity names for wemportal because of config entry update")
+    _LOGGER.info("Migrating entity names for wemportal because of config entry update")
     await migrate_unique_ids(
         hass, config_entry, hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     )
