@@ -111,11 +111,15 @@ class WemPortalApi:
                     and self.spider_wait_interval == 0
                 ):
                     # Get data by web scraping
-                    webscrapint_data = self.fetch_webscraping_data()
-                    self.data[next(iter(self.data), "0000")] = webscrapint_data
+                    try:
+                        webscrapint_data = self.fetch_webscraping_data()
+                        self.data[next(iter(self.data), "0000")] = webscrapint_data
 
-                    # Update last_scraping_update timestamp
-                    self.last_scraping_update = datetime.now()
+                        # Update last_scraping_update timestamp
+                        self.last_scraping_update = datetime.now()
+                    except Exception as exc:
+                        _LOGGER.error(exc)
+
                 else:
                     # Reduce spider_wait_interval by 1 if > 0
                     self.spider_wait_interval = (
@@ -126,7 +130,10 @@ class WemPortalApi:
 
                 # Get data using API
                 if self.last_scraping_update is not None:
-                    self.get_data()
+                    try:
+                        self.get_data()
+                    except Exception as exc:
+                        _LOGGER.error(exc)
 
             # Return data
             return self.data
@@ -146,16 +153,16 @@ class WemPortalApi:
         except IndexError as exc:
             self.spider_retry_count += 1
             if self.spider_retry_count == 2:
-                self.webscraping_cookie = {}
+                self.webscraping_cookie = None
             self.spider_wait_interval = self.spider_retry_count
             raise WemPortalError(DATA_GATHERING_ERROR) from exc
         except AuthError as exc:
-            self.webscraping_cookie = {}
+            self.webscraping_cookie = None
             raise AuthError(
                 "AuthenticationError: Could not login with provided username and password. Check if your config contains the right credentials"
             ) from exc
         except ExpiredSessionError as exc:
-            self.webscraping_cookie = {}
+            self.webscraping_cookie = None
             raise ExpiredSessionError(
                 "ExpiredSessionError: Session expired. Next update will try to login again."
             ) from exc
