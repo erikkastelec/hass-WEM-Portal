@@ -1,25 +1,27 @@
-import requests as reqs
+""" Exceptions for the wemportal component."""
+
+from homeassistant.exceptions import HomeAssistantError
 
 
-class AuthError(reqs.HTTPError):
-    """Exception to indicate an authentication error."""
-
-
-class UnknownAuthError(reqs.HTTPError):
-    """Exception to indicate an unknown authentication error."""
-
-
-class WemPortalError(Exception):
+class WemPortalError(HomeAssistantError):
     """
     Custom exception for WEM Portal errors
     """
 
+class AuthError(WemPortalError):
+    """Exception to indicate an authentication error."""
+
+
+class UnknownAuthError(WemPortalError):
+    """Exception to indicate an unknown authentication error."""
+
+class ServerError(WemPortalError):
+    """Exception to indicate a server error."""
 
 class ExpiredSessionError(WemPortalError):
     """
     Custom exception for expired session errors
     """
-
 
 class ParameterChangeError(WemPortalError):
     """
