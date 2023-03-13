@@ -151,9 +151,8 @@ class WemPortalApi:
         try:
             data = processor.run([wemportal_job])[0]
         except IndexError as exc:
+            self.webscraping_cookie = None
             self.spider_retry_count += 1
-            if self.spider_retry_count == 2:
-                self.webscraping_cookie = None
             self.spider_wait_interval = self.spider_retry_count
             raise WemPortalError(DATA_GATHERING_ERROR) from exc
         except AuthError as exc:
@@ -183,8 +182,11 @@ class WemPortalApi:
             "AppVersion": "2.0.2",
             "ClientOS": "Android",
         }
+        try:
+            self.session.close()
+        except Exception:
+            pass
         self.session = reqs.Session()
-        self.session.cookies.clear()
         self.session.headers.update(self.headers)
         try:
             response = self.session.post(
@@ -211,15 +213,14 @@ class WemPortalApi:
         self.valid_login = True
 
     def get_response_details(self, response: reqs.Response):
-        server_status = ""
-        server_message = ""
         try:
             response_data = response.json()
             # Status we get back from server
             server_status = response_data["Status"]
             server_message = response_data["Message"]
         except KeyError:
-            pass
+            server_status = response.reason
+            server_message = response.content
         return server_status, server_message
 
     def make_api_call(
@@ -240,7 +241,6 @@ class WemPortalApi:
         except Exception as exc:
             if response.status_code == 401 and not login_retry:
                 self.api_login()
-                headers = headers or self.headers
                 time.sleep(delay)
                 response = self.make_api_call(
                     url,
@@ -344,8 +344,13 @@ class WemPortalApi:
         )
         if response.status_code == 401 and login:
             self.api_login()
-            self.change_value(device_id,
-                parameter_id, module_index, module_type, numeric_value, login=False
+            self.change_value(
+                device_id,
+                parameter_id,
+                module_index,
+                module_type,
+                numeric_value,
+                login=False,
             )
         try:
             response.raise_for_status()
