@@ -187,7 +187,8 @@ class WemPortalApi:
         except Exception:
             pass
         self.session = reqs.Session()
-        self.session.headers.update(self.headers)
+        headers = copy.deepcopy(self.headers)
+        self.session.headers.update(headers)
         try:
             response = self.session.post(
                 "https://www.wemportal.com/app/Account/Login",
@@ -229,7 +230,7 @@ class WemPortalApi:
         response = None
         try:
             if not headers:
-                headers = self.headers
+                headers =  copy.deepcopy(self.headers)
             if not data:
                 response = self.session.get(url, headers=headers)
             else:
