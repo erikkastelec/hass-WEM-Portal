@@ -32,7 +32,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=update_interval,
         )
         self.api = api
-        self.has = hass
+        self.hass = hass
         self.config_entry = config_entry
 
     async def _async_update_data(self):
@@ -50,7 +50,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                         self.config_entry.data.get(CONF_PASSWORD),
                         self.config_entry.options,
                     )
-                    api = new_api
+                    self.api = new_api
                 except Exception:
                     pass
                 raise UpdateFailed from exc
