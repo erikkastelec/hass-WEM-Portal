@@ -195,7 +195,11 @@ class WemPortalApi:
         except reqs.exceptions.HTTPError as exc:
             self.valid_login = False
             response_status, response_message = self.get_response_details(response)
-            if response.status_code == 400:
+            if response is None:
+                raise UnknownAuthError(
+                    f"Authentication Error: Encountered an unknown authentication error."
+                ) from exc
+            elif response.status_code == 400:
                 raise AuthError(
                     f"Authentication Error: Check if your login credentials are correct. Received response code: {response.status_code}, response: {response.content}. Server returned internal status code: {response_status} and message: {response_message}"
                 ) from exc
@@ -213,13 +217,14 @@ class WemPortalApi:
     def get_response_details(self, response: reqs.Response):
         server_status = ""
         server_message = ""
-        try:
-            response_data = response.json()
-            # Status we get back from server
-            server_status = response_data["Status"]
-            server_message = response_data["Message"]
-        except KeyError:
-            pass
+        if response:
+            try:
+                response_data = response.json()
+                # Status we get back from server
+                server_status = response_data["Status"]
+                server_message = response_data["Message"]
+            except KeyError:
+                pass
         return server_status, server_message
 
     def make_api_call(
@@ -238,7 +243,7 @@ class WemPortalApi:
                 )
             response.raise_for_status()
         except Exception as exc:
-            if response.status_code == 401 and not login_retry:
+            if response and response.status_code == 401 and not login_retry:
                 self.api_login()
                 headers = headers or self.headers
                 time.sleep(delay)
