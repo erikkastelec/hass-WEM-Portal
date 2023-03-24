@@ -62,7 +62,7 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
 
     def __init__(
         self, coordinator, config_entry: ConfigEntry, device_id, _unique_id, entity_data
-    ):
+    ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._last_updated = None
@@ -83,6 +83,7 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
         """Call the API to change the parameter value"""
         await self.hass.async_add_executor_job(
             self.coordinator.api.change_value,
+            self._device_id,
             self._parameter_id,
             self._module_index,
             self._module_type,

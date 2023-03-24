@@ -61,7 +61,7 @@ class WemPortalNumber(CoordinatorEntity, NumberEntity):
 
     def __init__(
         self, coordinator, config_entry: ConfigEntry, device_id, _unique_id, entity_data
-    ):
+    ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._config_entry = config_entry
@@ -147,7 +147,7 @@ class WemPortalNumber(CoordinatorEntity, NumberEntity):
                 return state
             return 0
         except KeyError:
-            _LOGGER.error("Can't find %s", self._unique_id)
+            _LOGGER.warning("Can't find %s", self._unique_id)
             _LOGGER.debug("Sensor data %s", self.coordinator.data)
             return None
 

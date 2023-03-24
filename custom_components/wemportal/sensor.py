@@ -135,7 +135,7 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
                 return state
             return 0
         except KeyError:
-            _LOGGER.error("Can't find %s", self._unique_id)
+            _LOGGER.warning("Can't find %s", self._unique_id)
             _LOGGER.debug("Sensor data %s", self.coordinator.data)
             return None
 

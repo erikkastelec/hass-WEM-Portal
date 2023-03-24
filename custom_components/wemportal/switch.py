@@ -61,7 +61,7 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
 
     def __init__(
         self, coordinator, config_entry: ConfigEntry, device_id, _unique_id, entity_data
-    ):
+    ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._last_updated = None
@@ -170,7 +170,7 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
                 return self._state
 
         except KeyError:
-            _LOGGER.error("Can't find %s", self._unique_id)
+            _LOGGER.warning("Can't find %s", self._unique_id)
             _LOGGER.debug("Sensor data %s", self.coordinator.data)
             return None
 
