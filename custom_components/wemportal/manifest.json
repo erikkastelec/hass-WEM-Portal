@@ -4,7 +4,7 @@
   "documentation": "https://github.com/erikkastelec/hass-WEM-Portal",
   "issue_tracker": "https://github.com/erikkastelec/hass-WEM-Portal/issues",
   "dependencies": [],
-  "version": "1.4.3",
+  "version": "1.4.4",
   "codeowners": [
     "@erikkastelec"
   ],

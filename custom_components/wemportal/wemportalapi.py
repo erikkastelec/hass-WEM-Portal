@@ -45,7 +45,6 @@ class WemPortalApi:
         self.scrapingMapper = {}
 
     def fetch_data(self):
-
         if self.mode == "web":
             self.fetch_webscraping_data()
         elif self.mode == "api":
@@ -95,7 +94,6 @@ class WemPortalApi:
         return self.data
 
     def api_login(self):
-
         payload = {
             "Name": self.username,
             "PasswordUTF8": self.password,
@@ -258,11 +256,32 @@ class WemPortalApi:
                 headers=headers,
                 data=json.dumps(data),
             )
-        values = self.session.post(
-            "https://www.wemportal.com/app/DataAccess/Read",
-            headers=headers,
-            data=json.dumps(data),
-        ).json()
+        try:
+            response = self.session.post(
+                "https://www.wemportal.com/app/DataAccess/Read",
+                headers=headers,
+                data=json.dumps(data),
+            )
+
+            if response and response.status_code == 200:
+                values = response.json()
+            else:
+                _LOGGER.debug(self.modules)
+                _LOGGER.debug(self.data)
+                if response:
+                    _LOGGER.warning(
+                        f"Non-200 status code received: {response.status_code}"
+                    )
+                else:
+                    _LOGGER.error(f"No response from wemportal API server.")
+                return
+
+        except reqs.exceptions.JSONDecodeError as exc:
+            _LOGGER.debug(self.modules)
+            _LOGGER.debug(self.data)
+            _LOGGER.error(f"Invalid JSON response received: {exc}")
+            _LOGGER.error(f"JSON response content: {response.content.decode('utf-8')}")
+            return
 
         # TODO: CLEAN UP
         # Map values to sensors we got during scraping.
@@ -270,7 +289,6 @@ class WemPortalApi:
         icon_mapper["°C"] = "mdi:thermometer"
         for module in values["Modules"]:
             for value in module["Values"]:
-
                 name = (
                     self.modules[(module["ModuleIndex"], module["ModuleType"])]["Name"]
                     + "-"
@@ -321,7 +339,6 @@ class WemPortalApi:
                     data[name]["value"] = 0.0
                 # Select entities
                 if data[name]["IsWriteable"]:
-
                     # NUMBER PLATFORM
                     if data[name]["DataType"] == -1 or data[name]["DataType"] == 3:
                         self.data[name] = {
@@ -548,11 +565,11 @@ class WemPortalApi:
 class WemPortalSpider(Spider):
     name = "WemPortalSpider"
     start_urls = START_URLS
-    
+
     custom_settings = {
         "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
     }
-    
+
     def __init__(self, username, password, **kw):
         self.username = username
         self.password = password
