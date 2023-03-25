@@ -9,7 +9,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, _LOGGER
 from . import get_wemportal_unique_id
 
 
@@ -116,11 +116,19 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
     @property
     def current_option(self) -> str:
         """Return the current option."""
-        return self._options_names[
-            self._options.index(
-                self.coordinator.data[self._device_id][self._name]["value"]
-            )
-        ]
+        try:
+            options = self._options_names[
+                self._options.index(
+                    self.coordinator.data[self._device_id][self._name]["value"]
+                )
+            ]
+            if options:
+                return options
+        except KeyError:
+            _LOGGER.warning("Can't find %s", self._unique_id)
+            _LOGGER.debug("Sensor data %s", self.coordinator.data)
+
+        return None
 
     async def async_added_to_hass(self):
         """When entity is added to hass."""
