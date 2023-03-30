@@ -40,7 +40,7 @@ from .const import (
 class WemPortalApi:
     """Wrapper class for Weishaupt WEM Portal"""
 
-    def __init__(self, username, password, config={}):
+    def __init__(self, username, password, config={}) -> None:
         self.data = {}
         self.username = username
         self.password = password
@@ -349,8 +349,13 @@ class WemPortalApi:
         )
         if response.status_code == 401 and login:
             self.api_login()
-            self.change_value(device_id,
-                parameter_id, module_index, module_type, numeric_value, login=False
+            self.change_value(
+                device_id,
+                parameter_id,
+                module_index,
+                module_type,
+                numeric_value,
+                login=False,
             )
         try:
             response.raise_for_status()

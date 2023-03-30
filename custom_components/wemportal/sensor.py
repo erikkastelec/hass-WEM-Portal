@@ -9,7 +9,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -57,10 +57,7 @@ async def async_setup_entry(
                         coordinator, config_entry, device_id, unique_id, values
                     )
                 )
-    try:
-        async_add_entities(entities)
-    except Exception as e:
-        print(e)
+    async_add_entities(entities)
 
 
 class WemPortalSensor(CoordinatorEntity, SensorEntity):
@@ -68,20 +65,21 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
 
     def __init__(
         self, coordinator, config_entry: ConfigEntry, device_id, _unique_id, entity_data
-    ):
+    ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._last_updated = None
         self._config_entry = config_entry
         self._device_id = device_id
-        self._name = _unique_id
-        self._unique_id = get_wemportal_unique_id(
-            self._config_entry.entry_id, str(self._device_id), str(self._name)
+        self._attr_name = _unique_id
+        self._attr_unique_id = get_wemportal_unique_id(
+            self._config_entry.entry_id, str(self._device_id), str(self._attr_name)
         )
         self._parameter_id = entity_data["ParameterID"]
-        self._icon = entity_data["icon"]
-        self._unit = entity_data["unit"]
-        self._state = self.state
+        self._attr_icon = entity_data["icon"]
+        self._attr_native_unit_of_measurement = entity_data["unit"]
+        self._attr_native_value = entity_data["value"]
+        self._attr_should_poll = False
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -96,64 +94,41 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
         }
 
     @property
-    def should_poll(self):
-        """No need to poll. Coordinator notifies entity of updates."""
-        return False
-
-    @property
     def available(self):
         """Return if entity is available."""
         return self.coordinator.last_update_success
 
-    async def async_added_to_hass(self):
-        """When entity is added to hass."""
-        self.async_on_remove(
-            self.coordinator.async_add_listener(self.async_write_ha_state)
-        )
+    # async def async_added_to_hass(self):
+    #     """When entity is added to hass."""
+    #     self.async_on_remove(
+    #         self.coordinator.async_add_listener(self._handle_coordinator_update)
+    #     )
 
-    @property
-    def name(self):
-        """Return the name of the sensor."""
-        return self._name
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
 
-    @property
-    def unique_id(self):
-        """Return the unique ID of the sensor."""
-        return self._unique_id
-
-    @property
-    def icon(self):
-        """Icon to use in the frontend, if any."""
-        return self._icon
-
-    @property
-    def state(self):
-        """Return the state of the sensor."""
         try:
-            state = self.coordinator.data[self._device_id][self._name]["value"]
-            if state:
-                return state
-            return 0
+            self._attr_native_value = self.coordinator.data[self._device_id][
+                self._attr_name
+            ]["value"]
         except KeyError:
-            _LOGGER.warning("Can't find %s", self._unique_id)
+            self._attr_native_value = None
+            _LOGGER.warning("Can't find %s", self._attr_unique_id)
             _LOGGER.debug("Sensor data %s", self.coordinator.data)
-            return None
 
-    @property
-    def unit_of_measurement(self):
-        """Return the unit of measurement of this entity, if any."""
-        return self._unit
+        self.async_write_ha_state()
 
     @property
     def device_class(self):
         """Return the device_class of this entity."""
-        if self._unit == "°C":
+        if self._attr_native_unit_of_measurement == "°C":
             return SensorDeviceClass.TEMPERATURE
-        elif self._unit in ("kWh", "Wh"):
+        elif self._attr_native_unit_of_measurement in ("kWh", "Wh"):
             return SensorDeviceClass.ENERGY
-        elif self._unit in ("kW", "W"):
+        elif self._attr_native_unit_of_measurement in ("kW", "W"):
             return SensorDeviceClass.POWER
-        elif self._unit == "%":
+        elif self._attr_native_unit_of_measurement == "%":
             return SensorDeviceClass.POWER_FACTOR
         else:
             return None
@@ -161,9 +136,9 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
     @property
     def state_class(self):
         """Return the state class of this entity, if any."""
-        if self._unit in ("°C", "kW", "W", "%"):
+        if self._attr_native_unit_of_measurement in ("°C", "kW", "W", "%"):
             return SensorStateClass.MEASUREMENT
-        elif self._unit in ("kWh", "Wh"):
+        elif self._attr_native_unit_of_measurement in ("kWh", "Wh"):
             return SensorStateClass.TOTAL_INCREASING
         else:
             return None
