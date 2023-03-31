@@ -12,10 +12,11 @@ from datetime import datetime, timedelta
 import requests as reqs
 import scrapyscript
 from fuzzywuzzy import fuzz
-from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
+from homeassistant.const import CONF_SCAN_INTERVAL
 from scrapy import FormRequest, Spider, Request
 from .exceptions import (
     AuthError,
+    ForbiddenError,
     UnknownAuthError,
     WemPortalError,
     ExpiredSessionError,
@@ -73,7 +74,7 @@ class WemPortalApi:
             "X-Api-Version": "2.0.0.0",
             "Accept": "*/*",
         }
-        self.scrapingMapper = {}
+        self.scraping_mapper = {}
 
         # Used to keep track of how many update intervals to wait before retrying spider
         self.spider_wait_interval = 0
@@ -197,11 +198,15 @@ class WemPortalApi:
             response_status, response_message = self.get_response_details(response)
             if response is None:
                 raise UnknownAuthError(
-                    f"Authentication Error: Encountered an unknown authentication error."
+                    "Authentication Error: Encountered an unknown authentication error."
                 ) from exc
             elif response.status_code == 400:
                 raise AuthError(
                     f"Authentication Error: Check if your login credentials are correct. Received response code: {response.status_code}, response: {response.content}. Server returned internal status code: {response_status} and message: {response_message}"
+                ) from exc
+            elif response.status_code == 403:
+                raise ForbiddenError(
+                    f"WemPortal forbidden error: Server returned internal status code: {response_status} and message: {response_message}"
                 ) from exc
             elif response.status_code == 500:
                 raise ServerError(
@@ -243,7 +248,7 @@ class WemPortalApi:
                 )
             response.raise_for_status()
         except Exception as exc:
-            if response and response.status_code == 401 and not login_retry:
+            if response and response.status_code in (401, 403) and not login_retry:
                 self.api_login()
                 headers = headers or self.headers
                 time.sleep(delay)
@@ -347,7 +352,7 @@ class WemPortalApi:
             headers=headers,
             data=json.dumps(data),
         )
-        if response.status_code == 401 and login:
+        if response.status_code in (401, 403) and login:
             self.api_login()
             self.change_value(
                 device_id,
@@ -516,7 +521,7 @@ class WemPortalApi:
                         # Only for single device, don't know how to handle multiple devices with scraping yet
                         if self.mode == "both" and len(self.data.keys()) < 2:
                             try:
-                                temp = self.scrapingMapper[value["ParameterID"]]
+                                temp = self.scraping_mapper[value["ParameterID"]]
                             except KeyError:
                                 for scraped_entity in self.data[device_id].keys():
                                     scraped_entity_id = self.data[device_id][
@@ -530,21 +535,21 @@ class WemPortalApi:
                                             )
                                             >= 90
                                         ):
-                                            self.scrapingMapper.setdefault(
+                                            self.scraping_mapper.setdefault(
                                                 value["ParameterID"], []
                                             ).append(scraped_entity_id)
                                     except IndexError:
                                         pass
                                 # Check if empty
                                 try:
-                                    temp = self.scrapingMapper[value["ParameterID"]]
+                                    temp = self.scraping_mapper[value["ParameterID"]]
                                 except KeyError:
-                                    self.scrapingMapper[value["ParameterID"]] = [
+                                    self.scraping_mapper[value["ParameterID"]] = [
                                         value["friendlyName"]
                                     ]
 
                             finally:
-                                for scraped_entity in self.scrapingMapper[
+                                for scraped_entity in self.scraping_mapper[
                                     value["ParameterID"]
                                 ]:
                                     sensor_dict = {

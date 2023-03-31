@@ -8,7 +8,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-from .exceptions import ServerError, WemPortalError
+from .exceptions import ForbiddenError, ServerError, WemPortalError
 from .const import _LOGGER, DEFAULT_TIMEOUT
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from .wemportalapi import WemPortalApi
@@ -41,8 +41,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
             try:
                 return await self.hass.async_add_executor_job(self.api.fetch_data)
             except WemPortalError as exc:
-                
-                if isinstance(exc.__cause__, ServerError):
+                if isinstance(exc.__cause__, (ServerError, ForbiddenError)):
                     _LOGGER.error("Creating new wemportal api instance")
                     # TODO: This is a temporary solution and should be removed when api cause from #28 is resolved
                     try:
@@ -55,12 +54,14 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                     except Exception as exc2:
                         raise UpdateFailed from exc2
                     try:
-                        return await self.hass.async_add_executor_job(self.api.fetch_data)
+                        return await self.hass.async_add_executor_job(
+                            self.api.fetch_data
+                        )
                     except WemPortalError as exc2:
-                        _LOGGER.error("Error fetching data from wemportal", exc_info=exc)
+                        _LOGGER.error(
+                            "Error fetching data from wemportal", exc_info=exc
+                        )
                         raise UpdateFailed from exc2
                 else:
                     _LOGGER.error("Error fetching data from wemportal", exc_info=exc)
                     raise UpdateFailed from exc
-                    
-                
