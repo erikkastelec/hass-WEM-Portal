@@ -41,18 +41,19 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
             try:
                 return await self.hass.async_add_executor_job(self.api.fetch_data)
             except WemPortalError as exc:
+                # if isinstance(exc.__cause__, (ServerError, ForbiddenError)):
+                _LOGGER.error("Creating new wemportal api instance")
+                # TODO: This is a temporary solution and should be removed when api cause from #28 is resolved
+                try:
+                    new_api = WemPortalApi(
+                        self.config_entry.data.get(CONF_USERNAME),
+                        self.config_entry.data.get(CONF_PASSWORD),
+                        self.config_entry.options,
+                    )
+                    self.api = new_api
+                except Exception as exc2:
+                    raise UpdateFailed from exc2
                 if isinstance(exc.__cause__, (ServerError, ForbiddenError)):
-                    _LOGGER.error("Creating new wemportal api instance")
-                    # TODO: This is a temporary solution and should be removed when api cause from #28 is resolved
-                    try:
-                        new_api = WemPortalApi(
-                            self.config_entry.data.get(CONF_USERNAME),
-                            self.config_entry.data.get(CONF_PASSWORD),
-                            self.config_entry.options,
-                        )
-                        self.api = new_api
-                    except Exception as exc2:
-                        raise UpdateFailed from exc2
                     try:
                         return await self.hass.async_add_executor_job(
                             self.api.fetch_data
@@ -63,5 +64,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                         )
                         raise UpdateFailed from exc2
                 else:
-                    _LOGGER.error("Error fetching data from wemportal", exc_info=exc)
                     raise UpdateFailed from exc
+                # else:
+                #     _LOGGER.error("Error fetching data from wemportal", exc_info=exc)
+                #     raise UpdateFailed from exc
