@@ -131,10 +131,8 @@ class WemPortalApi:
 
                 # Get data using API
                 if self.last_scraping_update is not None:
-                    try:
-                        self.get_data()
-                    except Exception as exc:
-                        _LOGGER.error(exc)
+                    self.get_data()
+
 
             # Return data
             return self.data
