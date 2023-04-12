@@ -705,6 +705,9 @@ class WemPortalSpider(Spider):
                         else:
                             unit = None
 
+                    if(name.endswith('leistungsanforderung')):
+                        unit = '%'
+
                     icon_mapper = defaultdict(lambda: "mdi:flash")
                     icon_mapper["°C"] = "mdi:thermometer"
 
