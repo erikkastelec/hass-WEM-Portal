@@ -78,7 +78,7 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
         self._options_names = entity_data["optionsNames"]
         self._module_index = entity_data["ModuleIndex"]
         self._module_type = entity_data["ModuleType"]
-        self._attr_current_option = entity_data["value"]
+        self._attr_current_option = self._options_names[self._options.index( entity_data["value"])]
 
     async def async_select_option(self, option: str) -> None:
         """Call the API to change the parameter value"""
@@ -91,7 +91,7 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
             self._options[self._options_names.index(option)],
         )
 
-        self._attr_current_option = option
+        self._attr_current_option = self._options[self._options_names.index(option)]
 
         self.async_write_ha_state()
 
@@ -136,9 +136,7 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
         """Handle updated data from the coordinator."""
 
         try:
-            self._attr_current_option = self.coordinator.data[self._device_id][
-                self._attr_name
-            ]["value"]
+            self._attr_current_option = self._options_names[self._options.index( self.coordinator.data[self._device_id][self._attr_name]["value"])]
         except KeyError:
             self._attr_current_option = None
             _LOGGER.warning("Can't find %s", self._attr_unique_id)
