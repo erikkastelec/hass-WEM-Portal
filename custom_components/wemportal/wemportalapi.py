@@ -12,29 +12,61 @@ from datetime import datetime, timedelta
 import requests as reqs
 import scrapyscript
 from fuzzywuzzy import fuzz
-from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
-from scrapy import FormRequest, Spider
+from homeassistant.const import CONF_SCAN_INTERVAL
+from scrapy import FormRequest, Spider, Request
+from .exceptions import (
+    AuthError,
+    ForbiddenError,
+    UnknownAuthError,
+    WemPortalError,
+    ExpiredSessionError,
+    ParameterChangeError,
+    ServerError,
+)
 
-from .const import _LOGGER, CONF_LANGUAGE, CONF_MODE, CONF_SCAN_INTERVAL_API, START_URLS
+from .const import (
+    _LOGGER,
+    CONF_LANGUAGE,
+    CONF_MODE,
+    CONF_SCAN_INTERVAL_API,
+    START_URLS,
+    DATA_GATHERING_ERROR,
+    DEFAULT_CONF_LANGUAGE_VALUE,
+    DEFAULT_CONF_MODE_VALUE,
+    DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
+    DEFAULT_CONF_SCAN_INTERVAL_VALUE,
+)
 
 
 class WemPortalApi:
     """Wrapper class for Weishaupt WEM Portal"""
 
-    def __init__(self, config):
+    def __init__(self, username, password, config={}) -> None:
         self.data = {}
-        self.mode = config.get(CONF_MODE)
-        self.username = config.get(CONF_USERNAME)
-        self.password = config.get(CONF_PASSWORD)
-        self.update_interval = min(
-            config.get(CONF_SCAN_INTERVAL), config.get(CONF_SCAN_INTERVAL_API)
+        self.username = username
+        self.password = password
+        self.mode = config.get(CONF_MODE, DEFAULT_CONF_MODE_VALUE)
+        self.update_interval = timedelta(
+            seconds=min(
+                config.get(CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE),
+                config.get(
+                    CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
+                ),
+            )
         )
-        self.scan_interval = config.get(CONF_SCAN_INTERVAL)
-        self.scan_interval_api = config.get(CONF_SCAN_INTERVAL_API)
-        self.language = config.get(CONF_LANGUAGE)
-        self.device_id = None
+        self.scan_interval = timedelta(
+            seconds=config.get(CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE)
+        )
+        self.scan_interval_api = timedelta(
+            seconds=config.get(
+                CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
+            )
+        )
+        self.valid_login = False
+        self.language = config.get(CONF_LANGUAGE, DEFAULT_CONF_LANGUAGE_VALUE)
         self.session = None
         self.modules = None
+        self.webscraping_cookie = {}
         self.last_scraping_update = None
         # Headers used for all API calls
         self.headers = {
@@ -42,56 +74,105 @@ class WemPortalApi:
             "X-Api-Version": "2.0.0.0",
             "Accept": "*/*",
         }
-        self.scrapingMapper = {}
+        self.scraping_mapper = {}
+
+        # Used to keep track of how many update intervals to wait before retrying spider
+        self.spider_wait_interval = 0
+        # Used to keep track of the number of times the spider consecutively fails
+        self.spider_retry_count = 0
 
     def fetch_data(self):
-        if self.mode == "web":
-            self.fetch_webscraping_data()
-        elif self.mode == "api":
-            self.fetch_api_data()
-        else:
-            if (
-                self.last_scraping_update is None
-                or (datetime.now() - self.last_scraping_update + timedelta(seconds=10))
-                > self.scan_interval
-            ):
-                self.fetch_webscraping_data()
-                self.fetch_api_data()
-                self.last_scraping_update = datetime.now()
+        try:
+            # Login and get device info
+            if not self.valid_login:
+                self.api_login()
+            if len(self.data.keys()) == 0 or self.modules is None:
+                self.get_devices()
+                self.get_parameters()
+
+            # Select data source based on mode
+            if self.mode == "web":
+                # Get data by web scraping
+                self.data[next(iter(self.data), "0000")] = self.fetch_webscraping_data()
+            elif self.mode == "api":
+                # Get data using API
+                self.get_data()
             else:
-                self.fetch_api_data()
-        return self.data
+                # Get data using web scraping if it hasn't been updated recently,
+                # otherwise use API to get data
+                if self.last_scraping_update is None or (
+                    (
+                        (
+                            datetime.now()
+                            - self.last_scraping_update
+                            + timedelta(seconds=10)
+                        )
+                        > self.scan_interval
+                    )
+                    and self.spider_wait_interval == 0
+                ):
+                    # Get data by web scraping
+                    try:
+                        webscrapint_data = self.fetch_webscraping_data()
+                        self.data[next(iter(self.data), "0000")] = webscrapint_data
+
+                        # Update last_scraping_update timestamp
+                        self.last_scraping_update = datetime.now()
+                    except Exception as exc:
+                        _LOGGER.error(exc)
+
+                else:
+                    # Reduce spider_wait_interval by 1 if > 0
+                    self.spider_wait_interval = (
+                        self.spider_wait_interval - 1
+                        if self.spider_wait_interval > 0
+                        else self.spider_wait_interval
+                    )
+
+                # Get data using API
+                if self.last_scraping_update is not None:
+                    self.get_data()
+
+
+            # Return data
+            return self.data
+
+        # Catch and raise any exceptions as a WemPortalError
+        except Exception as exc:
+            raise WemPortalError from exc
 
     def fetch_webscraping_data(self):
         """Call spider to crawl WEM Portal"""
-        wemportal_job = scrapyscript.Job(WemPortalSpider, self.username, self.password)
+        wemportal_job = scrapyscript.Job(
+            WemPortalSpider, self.username, self.password, self.webscraping_cookie
+        )
         processor = scrapyscript.Processor(settings=None)
         try:
-            self.data = processor.run([wemportal_job])[0]
-        except IndexError:
-            _LOGGER.exception(
-                "There was a problem with getting data from WEM Portal. If this problem persists, "
-                "open an issue at https://github.com/erikkastelec/hass-WEM-Portal/issues"
-            )
+            data = processor.run([wemportal_job])[0]
+        except IndexError as exc:
+            self.spider_retry_count += 1
+            if self.spider_retry_count == 2:
+                self.webscraping_cookie = None
+            self.spider_wait_interval = self.spider_retry_count
+            raise WemPortalError(DATA_GATHERING_ERROR) from exc
+        except AuthError as exc:
+            self.webscraping_cookie = None
+            raise AuthError(
+                "AuthenticationError: Could not login with provided username and password. Check if your config contains the right credentials"
+            ) from exc
+        except ExpiredSessionError as exc:
+            self.webscraping_cookie = None
+            raise ExpiredSessionError(
+                "ExpiredSessionError: Session expired. Next update will try to login again."
+            ) from exc
         try:
-            if self.data["authErrorFlag"]:
-                _LOGGER.exception(
-                    "AuthenticationError: Could not login with provided username and password. Check if "
-                    "your config contains the right credentials"
-                )
+            self.webscraping_cookie = data["cookie"]
+            del data["cookie"]
         except KeyError:
-            """If authentication was successful"""
             pass
-
-    def fetch_api_data(self):
-        """Get data from the mobile API"""
-        if self.session is None:
-            self.api_login()
-        if self.device_id is None or self.modules is None:
-            self.get_devices()
-            self.get_parameters()
-        self.get_data()
-        return self.data
+        self.spider_retry_count = 0
+        self.spider_wait_interval = 0
+        return data
 
     def api_login(self):
         payload = {
@@ -104,87 +185,148 @@ class WemPortalApi:
         self.session = reqs.Session()
         self.session.cookies.clear()
         self.session.headers.update(self.headers)
-        response = self.session.post(
-            "https://www.wemportal.com/app/Account/Login",
-            data=payload,
-        )
-        if response.status_code != 200:
-            _LOGGER.error(
-                "Authentication Error: Check if your login credentials are correct. Receive response code: %s, response: %s",
-                str(response.status_code),
-                str(response.content),
+        try:
+            response = self.session.post(
+                "https://www.wemportal.com/app/Account/Login",
+                data=payload,
             )
+            response.raise_for_status()
+        except reqs.exceptions.HTTPError as exc:
+            self.valid_login = False
+            response_status, response_message = self.get_response_details(response)
+            if response is None:
+                raise UnknownAuthError(
+                    "Authentication Error: Encountered an unknown authentication error."
+                ) from exc
+            elif response.status_code == 400:
+                raise AuthError(
+                    f"Authentication Error: Check if your login credentials are correct. Received response code: {response.status_code}, response: {response.content}. Server returned internal status code: {response_status} and message: {response_message}"
+                ) from exc
+            elif response.status_code == 403:
+                raise ForbiddenError(
+                    f"WemPortal forbidden error: Server returned internal status code: {response_status} and message: {response_message}"
+                ) from exc
+            elif response.status_code == 500:
+                raise ServerError(
+                    f"WemPortal server error: Server returned internal status code: {response_status} and message: {response_message}"
+                ) from exc
+            else:
+                raise UnknownAuthError(
+                    f"Authentication Error: Encountered an unknown authentication error. Received response code: {response.status_code}, response: {response.content}. Server returned internal status code: {response_status} and message: {response_message}"
+                ) from exc
+        # Everything went fine, set valid_login to True
+        self.valid_login = True
+
+    def get_response_details(self, response: reqs.Response):
+        server_status = ""
+        server_message = ""
+        if response:
+            try:
+                response_data = response.json()
+                # Status we get back from server
+                server_status = response_data["Status"]
+                server_message = response_data["Message"]
+            except KeyError:
+                pass
+        return server_status, server_message
+
+    def make_api_call(
+        self, url: str, headers=None, data=None, login_retry=False, delay=1
+    ) -> reqs.Response:
+        response = None
+        try:
+            if not headers:
+                headers = self.headers
+            if not data:
+                response = self.session.get(url, headers=headers)
+            else:
+                headers["Content-Type"] = "application/json"
+                response = self.session.post(
+                    url, headers=headers, data=json.dumps(data)
+                )
+            response.raise_for_status()
+        except Exception as exc:
+            if response and response.status_code in (401, 403) and not login_retry:
+                self.api_login()
+                headers = headers or self.headers
+                time.sleep(delay)
+                response = self.make_api_call(
+                    url,
+                    headers=headers,
+                    data=data,
+                    login_retry=True,
+                    delay=delay,
+                )
+            else:
+                server_status, server_message = self.get_response_details(response)
+                raise WemPortalError(
+                    f"{DATA_GATHERING_ERROR} Server returned status code: {server_status} and message: {server_message}"
+                ) from exc
+
+        return response
 
     def get_devices(self):
         _LOGGER.debug("Fetching api device data")
         self.modules = {}
-        response = self.session.get(
-            "https://www.wemportal.com/app/device/Read",
-        )
-        # If session expired
-        if response.status_code == 401:
-            self.api_login()
-            response = self.session.get(
-                "https://www.wemportal.com/app/device/Read",
-            )
+        data = self.make_api_call("https://www.wemportal.com/app/device/Read").json()
 
-        data = response.json()
-        # TODO: add multiple device support
-        self.device_id = data["Devices"][0]["ID"]
-        for module in data["Devices"][0]["Modules"]:
-            self.modules[(module["Index"], module["Type"])] = {
-                "Index": module["Index"],
-                "Type": module["Type"],
-                "Name": module["Name"],
-            }
+        for device in data["Devices"]:
+            self.data[device["ID"]] = {}
+            self.modules[device["ID"]] = {}
+            for module in device["Modules"]:
+                self.modules[device["ID"]][(module["Index"], module["Type"])] = {
+                    "Index": module["Index"],
+                    "Type": module["Type"],
+                    "Name": module["Name"],
+                }
 
     def get_parameters(self):
-        _LOGGER.debug("Fetching api parameters data")
-        delete_candidates = []
-        for key, values in self.modules.items():
-            data = {
-                "DeviceID": self.device_id,
-                "ModuleIndex": values["Index"],
-                "ModuleType": values["Type"],
-            }
-            response = self.session.post(
-                "https://www.wemportal.com/app/EventType/Read",
-                data=data,
-            )
+        for device_id in self.data.keys():
+            _LOGGER.debug("Fetching api parameters data")
+            delete_candidates = []
+            for key, values in self.modules[device_id].items():
+                data = {
+                    "DeviceID": device_id,
+                    "ModuleIndex": values["Index"],
+                    "ModuleType": values["Type"],
+                }
+                response = self.make_api_call(
+                    "https://www.wemportal.com/app/EventType/Read", data=data
+                )
 
-            # If session expired
-            if response.status_code == 401:
-                self.api_login()
-                response = self.session.post(
-                    "https://www.wemportal.com/app/EventType/Read",
-                    data=data,
-                )
-            parameters = {}
-            try:
-                for parameter in response.json()["Parameters"]:
-                    parameters[parameter["ParameterID"]] = parameter
-                if not parameters:
-                    delete_candidates.append((values["Index"], values["Type"]))
-                else:
-                    self.modules[(values["Index"], values["Type"])][
-                        "parameters"
-                    ] = parameters
-            except KeyError:
-                _LOGGER.warning(
-                    "An error occurred while gathering parameters data. This issue should resolve by "
-                    "itself. If this problem persists, open an issue at "
-                    "https://github.com/erikkastelec/hass-WEM-Portal/issues'  "
-                )
-        for key in delete_candidates:
-            del self.modules[key]
+                parameters = {}
+                try:
+                    for parameter in response.json()["Parameters"]:
+                        parameters[parameter["ParameterID"]] = parameter
+                    if not parameters:
+                        delete_candidates.append((values["Index"], values["Type"]))
+                    else:
+                        self.modules[device_id][(values["Index"], values["Type"])][
+                            "parameters"
+                        ] = parameters
+                except KeyError as exc:
+                    # TODO: make sure that we should fail here or should we just log and continue
+                    raise WemPortalError(
+                        "An error occurred while gathering parameters data. This issue should resolve by "
+                        "itself. If this problem persists, open an issue at "
+                        "https://github.com/erikkastelec/hass-WEM-Portal/issues'  "
+                    ) from exc
+            for key in delete_candidates:
+                del self.modules[device_id][key]
 
     def change_value(
-        self, parameter_id, module_index, module_type, numeric_value, login=True
+        self,
+        device_id,
+        parameter_id,
+        module_index,
+        module_type,
+        numeric_value,
+        login=True,
     ):
         """POST request to API to change a specific value"""
         _LOGGER.debug("Changing value for %s", parameter_id)
         data = {
-            "DeviceID": self.device_id,
+            "DeviceID": device_id,
             "Modules": [
                 {
                     "ModuleIndex": int(module_index),
@@ -198,150 +340,125 @@ class WemPortalApi:
                 }
             ],
         }
+        # _LOGGER.info(data)
+
+        # TODO: do this with self.make_api_call()
         headers = copy.deepcopy(self.headers)
         headers["Content-Type"] = "application/json"
-        # _LOGGER.info(data)
         response = self.session.post(
             "https://www.wemportal.com/app/DataAccess/Write",
             headers=headers,
             data=json.dumps(data),
         )
-        if response.status_code == 401 and login:
+        if response.status_code in (401, 403) and login:
             self.api_login()
             self.change_value(
-                parameter_id, module_index, module_type, numeric_value, login=False
+                device_id,
+                parameter_id,
+                module_index,
+                module_type,
+                numeric_value,
+                login=False,
             )
-        if response.status_code != 200:
-            _LOGGER.error("Error changing parameter %s value", parameter_id)
-            # _LOGGER.info("Error: %s", response.content)
-            # _LOGGER.info(response.__dict__)
+        try:
+            response.raise_for_status()
+        except Exception as exc:
+            raise ParameterChangeError(
+                "Error changing parameter %s value" % parameter_id
+            ) from exc
 
     # Refresh data and retrieve new data
     def get_data(self):
         _LOGGER.debug("Fetching fresh api data")
-        try:
-            data = {
-                "DeviceID": self.device_id,
-                "Modules": [
-                    {
-                        "ModuleIndex": module["Index"],
-                        "ModuleType": module["Type"],
-                        "Parameters": [
-                            {"ParameterID": parameter}
-                            for parameter in module["parameters"].keys()
-                        ],
-                    }
-                    for module in self.modules.values()
-                ],
-            }
-        except KeyError as _:
-            _LOGGER.warning(
-                "An error occurred while gathering data. This issue should resolve by "
-                "itself. If this problem persists, open an issue at "
-                "https://github.com/erikkastelec/hass-WEM-Portal/issues'  "
-            )
-            _LOGGER.debug(self.modules)
-            return
-        headers = copy.deepcopy(self.headers)
-        headers["Content-Type"] = "application/json"
-        response = self.session.post(
-            "https://www.wemportal.com/app/DataAccess/Refresh",
-            headers=headers,
-            data=json.dumps(data),
-        )
-        if response.status_code == 401:
-            self.api_login()
-            response = self.session.post(
-                "https://www.wemportal.com/app/DataAccess/Refresh",
-                headers=headers,
-                data=json.dumps(data),
-            )
-        try:
-            response = self.session.post(
-                "https://www.wemportal.com/app/DataAccess/Read",
-                headers=headers,
-                data=json.dumps(data),
-            )
-
-            if response and response.status_code == 200:
-                values = response.json()
-            else:
-                _LOGGER.debug(self.modules)
-                _LOGGER.debug(self.data)
-                if response:
-                    _LOGGER.warning(
-                        f"Non-200 status code received: {response.status_code}"
-                    )
-                else:
-                    _LOGGER.error(f"No response from wemportal API server.")
-                return
-
-        except reqs.exceptions.JSONDecodeError as exc:
-            _LOGGER.debug(self.modules)
-            _LOGGER.debug(self.data)
-            _LOGGER.error(f"Invalid JSON response received: {exc}")
-            _LOGGER.error(f"JSON response content: {response.content.decode('utf-8')}")
-            return
-
-        # TODO: CLEAN UP
-        # Map values to sensors we got during scraping.
-        icon_mapper = defaultdict(lambda: "mdi:flash")
-        icon_mapper["°C"] = "mdi:thermometer"
-        for module in values["Modules"]:
-            for value in module["Values"]:
-                name = (
-                    self.modules[(module["ModuleIndex"], module["ModuleType"])]["Name"]
-                    + "-"
-                    + self.modules[(module["ModuleIndex"], module["ModuleType"])][
-                        "parameters"
-                    ][value["ParameterID"]]["ParameterID"]
-                )
-
-                data[name] = {
-                    "friendlyName": self.translate(
-                        self.language, self.friendly_name_mapper(value["ParameterID"])
-                    ),
-                    "ParameterID": value["ParameterID"],
-                    "unit": value["Unit"],
-                    "value": value["NumericValue"],
-                    "IsWriteable": self.modules[
-                        (module["ModuleIndex"], module["ModuleType"])
-                    ]["parameters"][value["ParameterID"]]["IsWriteable"],
-                    "DataType": self.modules[
-                        (module["ModuleIndex"], module["ModuleType"])
-                    ]["parameters"][value["ParameterID"]]["DataType"],
-                    "ModuleIndex": module["ModuleIndex"],
-                    "ModuleType": module["ModuleType"],
+        for device_id in self.data.keys():  # type: ignore
+            try:
+                data = {
+                    "DeviceID": device_id,
+                    "Modules": [
+                        {
+                            "ModuleIndex": module["Index"],
+                            "ModuleType": module["Type"],
+                            "Parameters": [
+                                {"ParameterID": parameter}
+                                for parameter in module["parameters"].keys()
+                            ],
+                        }
+                        for module in self.modules[device_id].values()
+                    ],
                 }
-                if not value["NumericValue"]:
-                    data[name]["value"] = value["StringValue"]
-                if self.modules[(module["ModuleIndex"], module["ModuleType"])][
-                    "parameters"
-                ][value["ParameterID"]]["EnumValues"]:
-                    if value["StringValue"] in [
+            except KeyError as exc:
+                _LOGGER.debug(DATA_GATHERING_ERROR, ": ")
+                _LOGGER.debug(self.modules[device_id])
+                raise WemPortalError(DATA_GATHERING_ERROR) from exc
+
+            self.make_api_call(
+                "https://www.wemportal.com/app/DataAccess/Refresh",
+                data=data,
+            )
+            values = self.make_api_call(
+                "https://www.wemportal.com/app/DataAccess/Read",
+                data=data,
+            ).json()
+            # TODO: CLEAN UP
+            # Map values to sensors we got during scraping.
+            icon_mapper = defaultdict(lambda: "mdi:flash")
+            icon_mapper["°C"] = "mdi:thermometer"
+            for module in values["Modules"]:
+                for value in module["Values"]:
+                    name = (
+                        self.modules[device_id][
+                            (module["ModuleIndex"], module["ModuleType"])
+                        ]["Name"]
+                        + "-"
+                        + self.modules[device_id][
+                            (module["ModuleIndex"], module["ModuleType"])
+                        ]["parameters"][value["ParameterID"]]["ParameterID"]
+                    )
+                    module_data = module_data = self.modules[device_id][
+                        (module["ModuleIndex"], module["ModuleType"])
+                    ]["parameters"][value["ParameterID"]]
+                    data[name] = {
+                        "friendlyName": self.translate(
+                            self.language,
+                            self.friendly_name_mapper(value["ParameterID"]),
+                        ),
+                        "ParameterID": value["ParameterID"],
+                        "unit": value["Unit"],
+                        "value": value["NumericValue"],
+                        "IsWriteable": module_data["IsWriteable"],
+                        "DataType": module_data["DataType"],
+                        "ModuleIndex": module["ModuleIndex"],
+                        "ModuleType": module["ModuleType"],
+                    }
+                    if not value["NumericValue"]:
+                        data[name]["value"] = value["StringValue"]
+                    if self.modules[device_id][
+                        (module["ModuleIndex"], module["ModuleType"])
+                    ]["parameters"][value["ParameterID"]]["EnumValues"]:
+                        if value["StringValue"] in [
+                            "off",
+                            "Aus",
+                            "Label ist null",
+                            "Label ist null ",
+                        ]:
+                            data[name]["value"] = 0.0
+                        else:
+                            try:
+                                data[name]["value"] = float(value["StringValue"])
+                            except ValueError:
+                                data[name]["value"] = value["StringValue"]
+                    if data[name]["value"] in [
                         "off",
                         "Aus",
                         "Label ist null",
                         "Label ist null ",
                     ]:
                         data[name]["value"] = 0.0
-                    else:
-                        try:
-                            data[name]["value"] = float(value["StringValue"])
-                        except ValueError:
-                            data[name]["value"] = value["StringValue"]
-                if data[name]["value"] in [
-                    "off",
-                    "Aus",
-                    "Label ist null",
-                    "Label ist null ",
-                ]:
-                    data[name]["value"] = 0.0
-                # Select entities
-                if data[name]["IsWriteable"]:
-                    # NUMBER PLATFORM
-                    if data[name]["DataType"] == -1 or data[name]["DataType"] == 3:
-                        self.data[name] = {
+
+                    if data[name]["IsWriteable"]:
+                        # NUMBER PLATFORM
+                        # Define common attributes
+                        common_attrs = {
                             "friendlyName": data[name]["friendlyName"],
                             "ParameterID": value["ParameterID"],
                             "unit": value["Unit"],
@@ -350,102 +467,64 @@ class WemPortalApi:
                             "DataType": data[name]["DataType"],
                             "ModuleIndex": module["ModuleIndex"],
                             "ModuleType": module["ModuleType"],
-                            "platform": "number",
-                            "min_value": float(
-                                self.modules[
-                                    (module["ModuleIndex"], module["ModuleType"])
-                                ]["parameters"][value["ParameterID"]]["MinValue"]
-                            ),
-                            "max_value": float(
-                                self.modules[
-                                    (module["ModuleIndex"], module["ModuleType"])
-                                ]["parameters"][value["ParameterID"]]["MaxValue"]
-                            ),
                         }
-                        if data[name]["DataType"] == -1:
-                            self.data[name]["step"] = 0.5
-                        else:
-                            self.data[name]["step"] = 1
 
-                    # SELECT PLATFORM
-                    elif data[name]["DataType"] == 1:
-                        self.data[name] = {
-                            "friendlyName": data[name]["friendlyName"],
-                            "ParameterID": value["ParameterID"],
-                            "unit": value["Unit"],
-                            "icon": icon_mapper[value["Unit"]],
-                            "value": value["NumericValue"],
-                            "DataType": data[name]["DataType"],
-                            "ModuleIndex": module["ModuleIndex"],
-                            "ModuleType": module["ModuleType"],
-                            "platform": "select",
-                            "options": [
-                                x["Value"]
-                                for x in self.modules[
-                                    (module["ModuleIndex"], module["ModuleType"])
-                                ]["parameters"][value["ParameterID"]]["EnumValues"]
-                            ],
-                            "optionsNames": [
-                                x["Name"]
-                                for x in self.modules[
-                                    (module["ModuleIndex"], module["ModuleType"])
-                                ]["parameters"][value["ParameterID"]]["EnumValues"]
-                            ],
-                        }
-                    # SWITCH PLATFORM
-                    elif data[name]["DataType"] == 2:
-                        try:
-                            if (
-                                int(
-                                    self.modules[
-                                        (module["ModuleIndex"], module["ModuleType"])
-                                    ]["parameters"][value["ParameterID"]]["MinValue"]
-                                )
-                                == 0
-                                and int(
-                                    self.modules[
-                                        (module["ModuleIndex"], module["ModuleType"])
-                                    ]["parameters"][value["ParameterID"]]["MaxValue"]
-                                )
-                                == 1
-                            ):
-                                self.data[name] = {
-                                    "friendlyName": data[name]["friendlyName"],
-                                    "ParameterID": value["ParameterID"],
-                                    "unit": value["Unit"],
-                                    "icon": icon_mapper[value["Unit"]],
-                                    "value": value["NumericValue"],
-                                    "DataType": data[name]["DataType"],
-                                    "ModuleIndex": module["ModuleIndex"],
-                                    "ModuleType": module["ModuleType"],
-                                    "platform": "switch",
-                                }
-                            else:
-                                # Skip schedules
-                                continue
-                        # Catches exception when converting to int when MinValur or MaxValue is Nones
-                        except Exception:
-                            continue
+                        # Process data based on platform type
 
-                # if self.modules[(module["ModuleIndex"],module["ModuleType"])]["parameters"][value["ParameterID"]]["EnumValues"]:
-                #     for entry in self.modules[(module["ModuleIndex"],module["ModuleType"])]["parameters"][value["ParameterID"]]["EnumValues"]:
-                #         if entry["Value"] == round(value["NumericValue"]):
-                #             self.data[value["ParameterID"]]["value"] = entry["Name"]
-                #             break
-
-            for key, value in data.items():
-                if key not in ["DeviceID", "Modules"]:
-                    # Match only values, which are not writable (sensors)
-                    if not value["IsWriteable"]:
-                        # Only when mode == both. Combines data from web and api
-                        if self.mode == "both":
+                        # NUMBER PLATFORM
+                        if data[name]["DataType"] == -1 or data[name]["DataType"] == 3:
+                            self.data[device_id][name] = {
+                                **common_attrs,
+                                "platform": "number",
+                                "min_value": float(module_data["MinValue"]),
+                                "max_value": float(module_data["MaxValue"]),
+                                "step": 0.5 if data[name]["DataType"] == -1 else 1,
+                            }
+                        # SELECT PLATFORM
+                        elif data[name]["DataType"] == 1:
+                            self.data[device_id][name] = {
+                                **common_attrs,
+                                "platform": "select",
+                                "options": [
+                                    x["Value"] for x in module_data["EnumValues"]
+                                ],
+                                "optionsNames": [
+                                    x["Name"] for x in module_data["EnumValues"]
+                                ],
+                            }
+                        # SWITCH PLATFORM
+                        elif data[name]["DataType"] == 2:
                             try:
-                                temp = self.scrapingMapper[value["ParameterID"]]
+                                if (
+                                    int(module_data["MinValue"]) == 0
+                                    and int(module_data["MaxValue"]) == 1
+                                ):
+                                    self.data[device_id][name] = {
+                                        **common_attrs,
+                                        "platform": "switch",
+                                    }
+                                else:
+                                    # Skip schedules
+                                    continue
+                            except (ValueError, TypeError):
+                                continue
+
+                            # Catches exception when converting to int when MinValur or MaxValue is Nones
+                            except Exception:
+                                continue
+
+                for key, value in data.items():
+                    if key not in ["DeviceID", "Modules"] and not value["IsWriteable"]:
+                        # Ony when mode == both. Combines data from web and api
+                        # Only for single device, don't know how to handle multiple devices with scraping yet
+                        if self.mode == "both" and len(self.data.keys()) < 2:
+                            try:
+                                temp = self.scraping_mapper[value["ParameterID"]]
                             except KeyError:
-                                for scraped_entity in self.data.keys():
-                                    scraped_entity_id = self.data[scraped_entity][
-                                        "ParameterID"
-                                    ]
+                                for scraped_entity in self.data[device_id].keys():
+                                    scraped_entity_id = self.data[device_id][
+                                        scraped_entity
+                                    ]["ParameterID"]
                                     try:
                                         if (
                                             fuzz.ratio(
@@ -454,49 +533,44 @@ class WemPortalApi:
                                             )
                                             >= 90
                                         ):
-                                            try:
-                                                self.scrapingMapper[
-                                                    value["ParameterID"]
-                                                ].append(scraped_entity_id)
-                                            except KeyError:
-                                                self.scrapingMapper[
-                                                    value["ParameterID"]
-                                                ] = [scraped_entity_id]
+                                            self.scraping_mapper.setdefault(
+                                                value["ParameterID"], []
+                                            ).append(scraped_entity_id)
                                     except IndexError:
                                         pass
                                 # Check if empty
                                 try:
-                                    temp = self.scrapingMapper[value["ParameterID"]]
+                                    temp = self.scraping_mapper[value["ParameterID"]]
                                 except KeyError:
-                                    self.scrapingMapper[value["ParameterID"]] = [
+                                    self.scraping_mapper[value["ParameterID"]] = [
                                         value["friendlyName"]
                                     ]
+
                             finally:
-                                for scraped_entity in self.scrapingMapper[
+                                for scraped_entity in self.scraping_mapper[
                                     value["ParameterID"]
                                 ]:
-                                    try:
-                                        self.data[scraped_entity] = {
-                                            "value": value["value"],
-                                            "name": self.data[scraped_entity]["name"],
-                                            "unit": self.data[scraped_entity]["unit"],
-                                            "icon": self.data[scraped_entity]["icon"],
-                                            "friendlyName": scraped_entity,
-                                            "ParameterID": scraped_entity,
-                                            "platform": "sensor",
-                                        }
-                                    except KeyError:
-                                        self.data[scraped_entity] = {
-                                            "value": value["value"],
-                                            "unit": value["unit"],
-                                            "icon": icon_mapper[value["unit"]],
-                                            "friendlyName": scraped_entity,
-                                            "name": scraped_entity,
-                                            "ParameterID": scraped_entity,
-                                            "platform": "sensor",
-                                        }
+                                    sensor_dict = {
+                                        "value": value.get("value"),
+                                        "name": self.data[device_id]
+                                        .get(scraped_entity, {})
+                                        .get("name"),
+                                        "unit": self.data[device_id]
+                                        .get(scraped_entity, {})
+                                        .get("unit", value.get("unit")),
+                                        "icon": self.data[device_id]
+                                        .get(scraped_entity, {})
+                                        .get(
+                                            "icon", icon_mapper.get(value.get("unit"))
+                                        ),
+                                        "friendlyName": scraped_entity,
+                                        "ParameterID": scraped_entity,
+                                        "platform": "sensor",
+                                    }
+
+                                    self.data[device_id][scraped_entity] = sensor_dict
                         else:
-                            self.data[key] = {
+                            self.data[device_id][key] = {
                                 "value": value["value"],
                                 "ParameterID": value["ParameterID"],
                                 "unit": value["unit"],
@@ -562,53 +636,101 @@ class WemPortalApi:
         return out
 
 
+START_URLS = ["https://www.wemportal.com/Web/login.aspx"]
+
+
 class WemPortalSpider(Spider):
     name = "WemPortalSpider"
     start_urls = START_URLS
 
     custom_settings = {
-        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
+        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
+        "LOG_LEVEL": "ERROR",
     }
 
-    def __init__(self, username, password, **kw):
+    def __init__(self, username, password, cookie=None, **kw):
         self.username = username
         self.password = password
-        self.authErrorFlag = False
+        self.cookie = cookie if cookie else {}
+        self.retry = None
         super().__init__(**kw)
 
-    def parse(self, response):
-        """Login to WEM Portal"""
-        return FormRequest.from_response(
-            response,
-            formdata={
-                "ctl00$content$tbxUserName": self.username,
-                "ctl00$content$tbxPassword": self.password,
-                "Accept-Language": "en-US,en;q=0.5",
-            },
-            callback=self.navigate_to_expert_page,
-        )
+    def start_requests(self):
+        # Check if we have a cookie/session. Skip to main website if we do.
+        if ".ASPXAUTH" in self.cookie:
+            return [
+                Request(
+                    "https://www.wemportal.com/Web/Default.aspx",
+                    headers={
+                        "Accept-Language": "en-US,en;q=0.5",
+                        "Connection": "keep-alive",
+                    },
+                    cookies=self.cookie,
+                    callback=self.check_valid_login,
+                )
+            ]
+        return [
+            Request("https://www.wemportal.com/Web/Login.aspx", callback=self.login)
+        ]
 
-    def navigate_to_expert_page(self, response):
-        # sleep for 5 seconds to get proper language and updated data
-        time.sleep(5)
-        # _LOGGER.debug("Print user page HTML: %s", response.text)
+    def login(self, response):
+        return [
+            FormRequest.from_response(
+                response,
+                formdata={
+                    "ctl00$content$tbxUserName": self.username,
+                    "ctl00$content$tbxPassword": self.password,
+                    "Accept-Language": "en-US,en;q=0.5",
+                },
+                callback=self.check_valid_login,
+            )
+        ]
+
+    # Extract cookies from response.request.headers and convert them to dict
+    def get_cookies(self, response):
+        cookies = {}
+        response_cookies = response.request.headers.getlist("Cookie")
+        if len(response_cookies) > 0:
+            for cookie_entry in response_cookies[0].decode("utf-8").split("; "):
+                parts = cookie_entry.split("=")
+                if len(parts) == 2:
+                    cookie_name, cookie_value = parts
+                    cookies[cookie_name] = cookie_value
+            self.cookie = cookies
+
+    # Check if login was successful. If not, return authErrorFlag
+    def check_valid_login(self, response):
         if (
-            response.url
-            == "https://www.wemportal.com/Web/login.aspx?AspxAutoDetectCookieSupport=1"
+            response.url.lower() == "https://www.wemportal.com/Web/Login.aspx".lower()
+            and not self.retry
         ):
-            _LOGGER.debug("Authentication failed")
-            self.authErrorFlag = True
-            form_data = {}
-        else:
-            _LOGGER.debug("Authentication successful")
-            form_data = self.generate_form_data(response)
-            _LOGGER.debug("Form data processed")
+            raise ExpiredSessionError(
+                "Scrapy spider session expired. Skipping one update cycle."
+            )
+
+        elif (
+            response.url.lower()
+            == "https://www.wemportal.com/Web/Login.aspx?AspxAutoDetectCookieSupport=1".lower()
+            or response.status != 200
+        ):
+            raise AuthError(
+                f"Authentication Error: Encountered an unknown authentication error. Received response code: {response.status_code}, response: {response.content}"
+            )
+
+        self.retry = None
+        # Wait 2 seconds so everything loads
+        time.sleep(2)
+        form_data = self.generate_form_data(response)
+        self.get_cookies(response)
+        cookie_string = ";".join(
+            [f"{key}={value}" for key, value in self.cookie.items()]
+        )
         return FormRequest(
             url="https://www.wemportal.com/Web/default.aspx",
             formdata=form_data,
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",
-                "Cookie": response.request.headers.getlist("Cookie")[0].decode("utf-8"),
+                "Cookie": cookie_string,
                 "Accept-Language": "en-US,en;q=0.5",
             },
             method="POST",
@@ -644,10 +766,9 @@ class WemPortalSpider(Spider):
     def scrape_pages(self, response):
         # sleep for 5 seconds to get proper language and updated data
         time.sleep(5)
-        # _LOGGER.debug("Print expert page HTML: %s", response.text)
-        if self.authErrorFlag:
-            yield {"authErrorFlag": True}
-        _LOGGER.debug("Scraping page")
+        _LOGGER.debug("Print expert page HTML: %s", response.text)
+        # if self.authErrorFlag != 0:
+        #     yield {"authErrorFlag": self.authErrorFlag}
         output = {}
         for i, div in enumerate(
             response.xpath(
@@ -722,5 +843,7 @@ class WemPortalSpider(Spider):
                     }
                 except IndexError:
                     continue
+
+        output["cookie"] = self.cookie
 
         yield output
