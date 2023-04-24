@@ -91,7 +91,7 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
             self._options[self._options_names.index(option)],
         )
 
-        self._attr_current_option = self._options[self._options_names.index(option)]
+        self._attr_current_option = option
 
         self.async_write_ha_state()
 
