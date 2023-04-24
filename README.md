@@ -57,9 +57,5 @@ Configuration variables:
 
 ## Troubleshooting
 Please set your logging for the custom_component to debug:
-```yaml
-logger:
-  default: warn
-  logs:
-    custom_components.wemportal: debug
-```
+
+Go to `Settings > Devices&Services `, find WEM Portal and click on `three dots` at the bottom of the card. Click on `Enable debug logging`.
