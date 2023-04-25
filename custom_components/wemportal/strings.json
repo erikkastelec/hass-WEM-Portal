@@ -1,32 +1,32 @@
 {
-    "config": {
-      "step": {
-        "user": {
-          "data": {
-            "username": "[%key:common::config_flow::data::username%]",
-            "password": "[%key:common::config_flow::data::password%]"
-          }
+  "config": {
+    "step": {
+      "user": {
+        "data": {
+          "username": "Username (email)",
+          "password": "Password"
         }
-      },
-      "error": {
-        "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-        "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
-        "unknown": "[%key:common::config_flow::error::unknown%]"
-      },
-      "abort": {
-        "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
       }
     },
-    "options": {
-      "step": {
-        "init": {
-          "data": {
-            "scan_interval": "Web scraping interval (default = 1800 sec)",
-            "api_scan_interval": "Api scan interval (default = 300 sec)",
-            "language": "Language (default = en)",
-            "mode": "[%key:common::config_flow::data::modes%](default = api)"
-          }
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid authentication",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "Account is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "scan_interval": "Web scraping interval (default = 1800 sec)",
+          "api_scan_interval": "Api scan interval (default = 300 sec)",
+          "language": "Language (default = en)",
+          "mode": "Mode(default = api)"
         }
       }
     }
   }
+}
