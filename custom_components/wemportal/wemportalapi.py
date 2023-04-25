@@ -823,6 +823,10 @@ class WemPortalSpider(Spider):
                             "Label ist null ",
                         ]:
                             value = 0.0
+                        elif value in [
+                            "Ein"
+                        ]:
+                            value = 1.0
                         else:
                             unit = None
 
