@@ -223,6 +223,7 @@ class WemPortalApi:
         if response:
             try:
                 response_data = response.json()
+                _LOGGER.debug(response_data)
                 # Status we get back from server
                 server_status = response_data["Status"]
                 server_message = response_data["Message"]
@@ -238,12 +239,15 @@ class WemPortalApi:
             if not headers:
                 headers = self.headers
             if not data:
+                _LOGGER.debug(f"Sending GET request to {url} with headers: {headers}")
                 response = self.session.get(url, headers=headers)
             else:
                 headers["Content-Type"] = "application/json"
+                _LOGGER.debug(f"Sending POST request to {url} with headers: {headers} and data: {data}")
                 response = self.session.post(
                     url, headers=headers, data=json.dumps(data)
                 )
+
             response.raise_for_status()
         except Exception as exc:
             if response and response.status_code in (401, 403) and not login_retry:
@@ -263,6 +267,7 @@ class WemPortalApi:
                     f"{DATA_GATHERING_ERROR} Server returned status code: {server_status} and message: {server_message}"
                 ) from exc
 
+        _LOGGER.debug(response)
         return response
 
     def get_devices(self):
@@ -290,6 +295,7 @@ class WemPortalApi:
                 continue
             _LOGGER.debug("Fetching api parameters data for device %s", device_id)
             _LOGGER.debug(self.data)
+            _LOGGER.debug(self.modules[device_id])
             delete_candidates = []
             for key, values in self.modules[device_id].items():
                 data = {
