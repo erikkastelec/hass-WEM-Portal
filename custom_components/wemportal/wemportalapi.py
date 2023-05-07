@@ -243,6 +243,7 @@ class WemPortalApi:
                 response = self.session.get(url, headers=headers)
             else:
                 headers["Content-Type"] = "application/json"
+                data = {k: v.encode('utf-8') if isinstance(v, str) else v for k, v in data.items()}
                 _LOGGER.debug(f"Sending POST request to {url} with headers: {headers} and data: {data}")
                 response = self.session.post(
                     url, headers=headers, data=json.dumps(data)
@@ -338,6 +339,8 @@ class WemPortalApi:
     ):
         """POST request to API to change a specific value"""
         _LOGGER.debug("Changing value for %s", parameter_id)
+        # Encode into UTF-8
+        parameter_id = parameter_id.encode('utf-8')
         data = {
             "DeviceID": device_id,
             "Modules": [
