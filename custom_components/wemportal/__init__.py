@@ -50,6 +50,8 @@ async def migrate_unique_ids(
 
     change = False
     for unique_id, values in data.items():
+        if isinstance(values, int):
+            continue
         name_id = er.async_get_entity_id(values["platform"], DOMAIN, unique_id)
         new_id = get_wemportal_unique_id(config_entry.entry_id, device_id, unique_id)
         if name_id is not None:
