@@ -279,10 +279,17 @@ class WemPortalApi:
                     "Type": module["Type"],
                     "Name": module["Name"],
                 }
+            self.data[device["ID"]]["ConnectionStatus"] = device["ConnectionStatus"]
+
+            # TODO: remove when we implement multiple device support
+            break
 
     def get_parameters(self):
         for device_id in self.data.keys():
-            _LOGGER.debug("Fetching api parameters data")
+            if self.data[device_id]["ConnectionStatus"] != 0:
+                continue
+            _LOGGER.debug("Fetching api parameters data for device %s", device_id)
+            _LOGGER.debug(self.data)
             delete_candidates = []
             for key, values in self.modules[device_id].items():
                 data = {
@@ -293,7 +300,7 @@ class WemPortalApi:
                 response = self.make_api_call(
                     "https://www.wemportal.com/app/EventType/Read", data=data
                 )
-
+                _LOGGER.debug(response.json())
                 parameters = {}
                 try:
                     for parameter in response.json()["Parameters"]:

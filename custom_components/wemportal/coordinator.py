@@ -1,5 +1,6 @@
 """ WemPortal integration coordinator """
 from __future__ import annotations
+from time import monotonic
 
 import async_timeout
 from homeassistant.config_entries import ConfigEntry
@@ -9,7 +10,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 from .exceptions import ForbiddenError, ServerError, WemPortalError
-from .const import _LOGGER, DEFAULT_TIMEOUT
+from .const import _LOGGER, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE, DEFAULT_TIMEOUT
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from .wemportalapi import WemPortalApi
 
@@ -34,15 +35,22 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
         self.api = api
         self.hass = hass
         self.config_entry = config_entry
+        self.last_try = None
+        self.num_failed = 0
 
     async def _async_update_data(self):
         """Fetch data from the wemportal api"""
+        if self.num_failed > 2 and monotonic() - self.last_try < DEFAULT_CONF_SCAN_INTERVAL_API_VALUE:
+            raise UpdateFailed("Waiting for more time to pass before retrying")
         async with async_timeout.timeout(DEFAULT_TIMEOUT):
             try:
-                return await self.hass.async_add_executor_job(self.api.fetch_data)
+                x = await self.hass.async_add_executor_job(self.api.fetch_data)
+                self.num_failed = 0
+                return x
             except WemPortalError as exc:
+                self.num_failed += 1
                 # if isinstance(exc.__cause__, (ServerError, ForbiddenError)):
-                _LOGGER.error("Creating new wemportal api instance")
+                _LOGGER.warning("Creating new wemportal api instance", exc_info=exc)
                 # TODO: This is a temporary solution and should be removed when api cause from #28 is resolved
                 try:
                     new_api = WemPortalApi(
@@ -53,14 +61,17 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                     self.api = new_api
                 except Exception as exc2:
                     raise UpdateFailed from exc2
-                if isinstance(exc.__cause__, (ServerError, ForbiddenError)):
+                if isinstance(exc.__cause__, (ServerError, ForbiddenError)) and self.num_failed <= 1:
                     try:
-                        return await self.hass.async_add_executor_job(
+                        x = await self.hass.async_add_executor_job(
                             self.api.fetch_data
                         )
+                        self.num_failed = 0
+                        return x
                     except WemPortalError as exc2:
+                        self.num_failed += 1
                         _LOGGER.error(
-                            "Error fetching data from wemportal", exc_info=exc
+                            "Error fetching data from wemportal", exc_info=exc2
                         )
                         raise UpdateFailed from exc2
                 else:
@@ -68,3 +79,5 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                 # else:
                 #     _LOGGER.error("Error fetching data from wemportal", exc_info=exc)
                 #     raise UpdateFailed from exc
+            finally:
+                self.last_try = monotonic()

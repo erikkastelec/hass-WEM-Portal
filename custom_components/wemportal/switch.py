@@ -25,6 +25,8 @@ async def async_setup_platform(
     entities: list[WemPortalSwitch] = []
     for device_id, entity_data in coordinator.data.items():
         for unique_id, values in entity_data.items():
+            if isinstance(values, int):
+                continue
             if values["platform"] == "switch":
                 entities.append(
                     WemPortalSwitch(
@@ -46,6 +48,8 @@ async def async_setup_entry(
     entities: list[WemPortalSwitch] = []
     for device_id, entity_data in coordinator.data.items():
         for unique_id, values in entity_data.items():
+            if isinstance(values, int):
+                continue
             if values["platform"] == "switch":
                 entities.append(
                     WemPortalSwitch(
