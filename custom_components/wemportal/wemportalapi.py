@@ -310,7 +310,7 @@ class WemPortalApi:
                         "https://www.wemportal.com/app/EventType/Read", data=data
                     )
                 except WemPortalError as exc:
-                    if isinstance(exc, reqs.exceptions.HTTPError) and exc.response.status_code == 400:
+                    if isinstance(exc.__cause__, reqs.exceptions.HTTPError) and exc.__cause__.response.status_code == 400:
                         _LOGGER.error("Could not fetch parameters for device %s for index %s and type %s", device_id,  values["Index"], values["Type"])
                         delete_candidates.append((values["Index"], values["Type"]))
                         continue
