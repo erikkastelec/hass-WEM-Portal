@@ -291,6 +291,7 @@ class WemPortalApi:
             break
 
     def get_parameters(self):
+        assert self.modules is not None
         for device_id in self.data.keys():
             if self.data[device_id]["ConnectionStatus"] != 0:
                 continue
@@ -304,9 +305,17 @@ class WemPortalApi:
                     "ModuleIndex": values["Index"],
                     "ModuleType": values["Type"],
                 }
-                response = self.make_api_call(
-                    "https://www.wemportal.com/app/EventType/Read", data=data
-                )
+                try:
+                    response = self.make_api_call(
+                        "https://www.wemportal.com/app/EventType/Read", data=data
+                    )
+                except WemPortalError as exc:
+                    if isinstance(exc, reqs.exceptions.HTTPError) and exc.response.status_code == 400:
+                        _LOGGER.error("Could not fetch parameters for device %s for index %s and type %s", device_id,  values["Index"], values["Type"])
+                        delete_candidates.append((values["Index"], values["Type"]))
+                        continue
+                    else:
+                        raise
                 _LOGGER.debug(response.json())
                 parameters = {}
                 try:
