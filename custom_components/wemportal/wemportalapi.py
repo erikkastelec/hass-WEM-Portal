@@ -182,6 +182,8 @@ class WemPortalApi:
             "AppVersion": "2.0.2",
             "ClientOS": "Android",
         }
+        if self.session is not None:
+            self.session.close()
         self.session = reqs.Session()
         self.session.cookies.clear()
         self.session.headers.update(self.headers)
@@ -348,8 +350,7 @@ class WemPortalApi:
     ):
         """POST request to API to change a specific value"""
         _LOGGER.debug("Changing value for %s", parameter_id)
-        # Encode into UTF-8
-        parameter_id = parameter_id.encode('utf-8')
+
         data = {
             "DeviceID": device_id,
             "Modules": [
