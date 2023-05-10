@@ -58,6 +58,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                         self.config_entry.data.get(CONF_PASSWORD),
                         self.config_entry.options,
                     )
+                    del self.api
                     self.api = new_api
                 except Exception as exc2:
                     raise UpdateFailed from exc2

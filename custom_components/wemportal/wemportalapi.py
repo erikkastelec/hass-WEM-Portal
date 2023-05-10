@@ -182,6 +182,8 @@ class WemPortalApi:
             "AppVersion": "2.0.2",
             "ClientOS": "Android",
         }
+        if self.session is not None:
+            self.session.close()
         self.session = reqs.Session()
         self.session.cookies.clear()
         self.session.headers.update(self.headers)
