@@ -348,8 +348,7 @@ class WemPortalApi:
     ):
         """POST request to API to change a specific value"""
         _LOGGER.debug("Changing value for %s", parameter_id)
-        # Encode into UTF-8
-        parameter_id = parameter_id.encode('utf-8')
+
         data = {
             "DeviceID": device_id,
             "Modules": [
