@@ -796,19 +796,9 @@ class WemPortalSpider(Spider):
         # if self.authErrorFlag != 0:
         #     yield {"authErrorFlag": self.authErrorFlag}
         output = {}
-        for i, div in enumerate(
-            response.xpath(
-                '//div[@class="RadPanelBar RadPanelBar_Default rpbSimpleData"]'
-            )
-        ):
-            header_query = (
-                "//span[@id='ctl00_rdMain_C_controlExtension_rptDisplayContent_ctl0"
-                + str(i)
-                + "_ctl00_rpbGroupData_i0_HeaderTemplate_lblHeaderText']/text() "
-            )
-            # Catch heading not starting at 0
-            try:
-                header = div.xpath(header_query).extract()[0]
+        for div in response.xpath('//div[contains(@class, "RadPanelBar RadPanelBar_Default rpbSimpleData")]'):
+            header = div.xpath('.//th[contains(@class, "simpleDataHeaderTextCell")]/span/text()').get()
+            if header is not None:
                 header = (
                     header.replace("/#", "")
                     .replace("  ", "")
@@ -817,63 +807,62 @@ class WemPortalSpider(Spider):
                     .replace(" ", "_")
                     .casefold()
                 )
-            except IndexError:
+            else:
                 header = "unknown"
                 continue
-            for td in div.xpath('.//table[@class="simpleDataTable"]//tr'):
+            for td in div.xpath('.//div[contains(@class, "rpTemplate")]/table[contains(@class, "simpleDataTable")]/tbody/tr'):
                 try:
-                    name = td.xpath(
-                        './/td//span[@class="simpleDataName"]/text()'
-                    ).extract()[0]
-                    value = td.xpath(
-                        './/td//span[@class="simpleDataValue"]/text()'
-                    ).extract()[0]
-                    name = name.replace("  ", "").replace(" ", "_").casefold()
-                    name = header + "-" + name
-                    split_value = value.split(" ")
-                    unit = ""
-                    if len(split_value) >= 2:
-                        value = split_value[0]
-                        unit = split_value[1]
-                    else:
-                        value = split_value[0]
-                    try:
-                        value = ".".join(value.split(","))
-                        value = float(value)
-                    except ValueError:
-                        if value in [
-                            "off",
-                            "Aus",
-                            "--",
-                            "Label ist null",
-                            "Label ist null ",
-                        ]:
-                            value = 0.0
-                        elif value in [
-                            "Ein"
-                        ]:
-                            value = 1.0
+                    name = td.xpath('.//td[contains(@class, "simpleDataNameCell")]/span/text()').get()
+                    value = td.xpath('.//td[contains(@class, "simpleDataValueCell") or contains(@class, "simpleDataValueEnumCell")]/span/text()').get()
+                    if name is not None and value is not None:
+                        name = name.replace("  ", "").replace(" ", "_").casefold()
+                        name = header + "-" + name
+                        split_value = value.split(" ")
+                        unit = ""
+                        if len(split_value) >= 2:
+                            value = split_value[0]
+                            unit = split_value[1]
                         else:
-                            unit = None
+                            value = split_value[0]
+                        try:
+                            value = ".".join(value.split(","))
+                            value = float(value)
+                        except ValueError:
+                            if value in [
+                                "off",
+                                "Aus",
+                                "--",
+                                "Label ist null",
+                                "Label ist null ",
+                            ]:
+                                value = 0.0
+                            elif value in [
+                                "Ein"
+                            ]:
+                                value = 1.0
+                            else:
+                                unit = None
 
-                    if(name.endswith('leistungsanforderung')):
-                        unit = '%'
+                        if(name.endswith('leistungsanforderung')):
+                            unit = '%'
 
-                    icon_mapper = defaultdict(lambda: "mdi:flash")
-                    icon_mapper["°C"] = "mdi:thermometer"
+                        icon_mapper = defaultdict(lambda: "mdi:flash")
+                        icon_mapper["°C"] = "mdi:thermometer"
 
-                    output[name] = {
-                        "value": value,
-                        "name": name,
-                        "icon": icon_mapper[unit],
-                        "unit": unit,
-                        "platform": "sensor",
-                        "friendlyName": name,
-                        "ParameterID": name,
-                    }
-                except IndexError:
+                        output[name] = {
+                            "value": value,
+                            "name": name,
+                            "icon": icon_mapper[unit],
+                            "unit": unit,
+                            "platform": "sensor",
+                            "friendlyName": name,
+                            "ParameterID": name,
+                        }
+                except (IndexError, ValueError):
                     continue
+
 
         output["cookie"] = self.cookie
 
         yield output
+
