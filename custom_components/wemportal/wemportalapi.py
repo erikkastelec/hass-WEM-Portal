@@ -276,7 +276,7 @@ class WemPortalApi:
     def get_devices(self):
         _LOGGER.debug("Fetching api device data")
         self.modules = {}
-        data = self.make_api_call("https://www.wemportal.com/app/device/Read").json()
+        data = self.make_api_call("https://www.wemportal.com/app/Device/Read").json()
 
         for device in data["Devices"]:
             self.data[device["ID"]] = {}
