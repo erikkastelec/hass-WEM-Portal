@@ -11,6 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import _LOGGER, DOMAIN
 from . import get_wemportal_unique_id
+from .utils import fix_unit_of_measurement
 
 
 async def async_setup_platform(
@@ -83,7 +84,7 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
 
         self._parameter_id = entity_data["ParameterID"]
         self._attr_icon = entity_data["icon"]
-        self._attr_unit = entity_data["unit"]
+        self._attr_unit = fix_unit_of_measurement(entity_data["unit"])
         self._attr_state = entity_data["value"]
         self._attr_should_poll = False
         self._attr_device_class = "switch"  # type: ignore
