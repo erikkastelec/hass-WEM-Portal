@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import _LOGGER, DOMAIN
 from . import get_wemportal_unique_id
+from .utils import fix_unit_of_measurement
 
 
 async def async_setup_platform(
@@ -81,7 +82,7 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
         )
         self._parameter_id = entity_data["ParameterID"]
         self._attr_icon = entity_data["icon"]
-        self._attr_native_unit_of_measurement = entity_data["unit"]
+        self._attr_native_unit_of_measurement = fix_unit_of_measurement(entity_data["unit"])
         self._attr_native_value = entity_data["value"]
         self._attr_should_poll = False
 
