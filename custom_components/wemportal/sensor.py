@@ -2,11 +2,7 @@
 Sensor platform for wemportal component
 """
 
-from homeassistant.components.sensor import (
-    SensorEntity,
-    SensorDeviceClass,
-    SensorStateClass,
-)
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 
 from homeassistant.core import HomeAssistant, callback
@@ -16,7 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import _LOGGER, DOMAIN
 from . import get_wemportal_unique_id
-from .utils import fix_unit_of_measurement
+from .utils import (fix_value_and_uom, uom_to_device_class, uom_to_state_class)
 
 
 async def async_setup_platform(
@@ -73,6 +69,9 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
+
+        val, uom = fix_value_and_uom(entity_data["value"], entity_data["unit"])
+
         self._last_updated = None
         self._config_entry = config_entry
         self._device_id = device_id
@@ -82,9 +81,11 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
         )
         self._parameter_id = entity_data["ParameterID"]
         self._attr_icon = entity_data["icon"]
-        self._attr_native_unit_of_measurement = fix_unit_of_measurement(entity_data["unit"])
-        self._attr_native_value = entity_data["value"]
+        self._attr_native_unit_of_measurement = uom
+        self._attr_native_value = val
         self._attr_should_poll = False
+
+        _LOGGER.debug(f'Init sensor: {self._attr_name}: "{self._attr_native_value}" [{self._attr_native_unit_of_measurement}]')
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -114,9 +115,18 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
         """Handle updated data from the coordinator."""
 
         try:
-            self._attr_native_value = self.coordinator.data[self._device_id][
-                self._attr_name
-            ]["value"]
+
+            entity_data = self.coordinator.data[self._device_id][self._attr_name]
+            val, uom = fix_value_and_uom(entity_data["value"], entity_data["unit"])
+                    
+            self._attr_native_value = val
+
+            # set uom if it references a valid non-trivial unit of measurement
+            if not uom in (None, ""):
+                self._attr_native_unit_of_measurement = uom
+
+            _LOGGER.debug(f'Update sensor: {self._attr_name}: "{self._attr_native_value}" [{self._attr_native_unit_of_measurement}]')
+
         except KeyError:
             self._attr_native_value = None
             _LOGGER.warning("Can't find %s", self._attr_unique_id)
@@ -126,27 +136,11 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def device_class(self):
-        """Return the device_class of this entity."""
-        if self._attr_native_unit_of_measurement == "°C":
-            return SensorDeviceClass.TEMPERATURE
-        elif self._attr_native_unit_of_measurement in ("kWh", "Wh"):
-            return SensorDeviceClass.ENERGY
-        elif self._attr_native_unit_of_measurement in ("kW", "W"):
-            return SensorDeviceClass.POWER
-        elif self._attr_native_unit_of_measurement == "%":
-            return SensorDeviceClass.POWER_FACTOR
-        else:
-            return None
+        return uom_to_device_class(self._attr_native_unit_of_measurement)
 
     @property
     def state_class(self):
-        """Return the state class of this entity, if any."""
-        if self._attr_native_unit_of_measurement in ("°C", "kW", "W", "%"):
-            return SensorStateClass.MEASUREMENT
-        elif self._attr_native_unit_of_measurement in ("kWh", "Wh"):
-            return SensorStateClass.TOTAL_INCREASING
-        else:
-            return None
+        return uom_to_state_class(self._attr_native_unit_of_measurement)
 
     @property
     def extra_state_attributes(self):

@@ -11,7 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import _LOGGER, DOMAIN
 from . import get_wemportal_unique_id
-from .utils import fix_unit_of_measurement
+from .utils import (fix_value_and_uom)
 
 
 async def async_setup_platform(
@@ -74,6 +74,9 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
+
+        val, uom = fix_value_and_uom(entity_data["value"], entity_data["unit"])
+
         self._last_updated = None
         self._config_entry = config_entry
         self._device_id = device_id
@@ -84,12 +87,14 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
 
         self._parameter_id = entity_data["ParameterID"]
         self._attr_icon = entity_data["icon"]
-        self._attr_unit = fix_unit_of_measurement(entity_data["unit"])
-        self._attr_state = entity_data["value"]
+        self._attr_unit = uom
+        self._attr_state = val
         self._attr_should_poll = False
         self._attr_device_class = "switch"  # type: ignore
         self._module_index = entity_data["ModuleIndex"]
         self._module_type = entity_data["ModuleType"]
+
+        _LOGGER.debug(f'Init switch: {self._attr_name}: "{self._attr_state}" [{self._attr_unit}]')
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -156,6 +161,9 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
                 self._attr_state = "on"  # type: ignore
             else:
                 self._attr_state = "off"  # type: ignore
+
+            _LOGGER.debug(f'Update switch: {self._attr_name}: "{self._attr_state}" [{self._attr_unit}]')
+
         except KeyError:
             self._attr_state = None
             _LOGGER.warning("Can't find %s", self._attr_unique_id)
