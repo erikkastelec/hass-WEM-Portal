@@ -13,7 +13,7 @@ Expert view) and makes it available in [Home Assistant](https://home-assistant.i
 ### HACS (preferred method)
 
 - In [HACS](https://github.com/hacs/default) Store search for erikkastelec/hass-WEM-Portal and install it
-- Activate the component by adding configuration into your `configuration.yaml` file.
+- Activate the component by configuring it via UI as described in [Configuration](#configuration) section below.
 
 ### Manual install
 

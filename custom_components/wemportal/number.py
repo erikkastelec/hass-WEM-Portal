@@ -10,6 +10,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import get_wemportal_unique_id
 from .const import _LOGGER, DOMAIN
 from homeassistant.helpers.entity import DeviceInfo
+from .utils import (fix_value_and_uom, uom_to_device_class)
 
 
 async def async_setup_platform(
@@ -68,6 +69,9 @@ class WemPortalNumber(CoordinatorEntity, NumberEntity):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
+
+        val, uom = fix_value_and_uom(entity_data["value"], entity_data["unit"])
+
         self._config_entry = config_entry
         self._device_id = device_id
         self._attr_name = _unique_id
@@ -77,14 +81,16 @@ class WemPortalNumber(CoordinatorEntity, NumberEntity):
         self._last_updated = None
         self._parameter_id = entity_data["ParameterID"]
         self._attr_icon = entity_data["icon"]
-        self._attr_native_unit_of_measurement = entity_data["unit"]
-        self._attr_native_value = entity_data["value"]
+        self._attr_native_unit_of_measurement = uom
+        self._attr_native_value = val
         self._attr_native_min_value = entity_data["min_value"]
         self._attr_native_max_value = entity_data["max_value"]
         self._attr_native_step = entity_data["step"]
         self._attr_should_poll = False
         self._module_index = entity_data["ModuleIndex"]
         self._module_type = entity_data["ModuleType"]
+
+        _LOGGER.debug(f'Init number: {self._attr_name}: "{self._attr_native_value}" [{self._attr_native_unit_of_measurement}]')
 
     async def async_set_native_value(self, value: float) -> None:
         """Update the current value."""
@@ -127,15 +133,27 @@ class WemPortalNumber(CoordinatorEntity, NumberEntity):
         """Handle updated data from the coordinator."""
 
         try:
-            self._attr_native_value = self.coordinator.data[self._device_id][
-                self._attr_name
-            ]["value"]
+            entity_data = self.coordinator.data[self._device_id][self._attr_name]
+            val, uom = fix_value_and_uom(entity_data["value"], entity_data["unit"])
+
+            self._attr_native_value = val
+
+            # set uom if it references a valid non-trivial unit of measurement
+            if not uom in (None, ""):
+                self._attr_native_unit_of_measurement = uom
+
+            _LOGGER.debug(f'Update number: {self._attr_name}: "{self._attr_native_value}" [{self._attr_native_unit_of_measurement}]')
+
         except KeyError:
             self._attr_native_value = None
             _LOGGER.warning("Can't find %s", self._attr_unique_id)
             _LOGGER.debug("Sensor data %s", self.coordinator.data)
 
         self.async_write_ha_state()
+
+    @property
+    def device_class(self):
+        return uom_to_device_class(self._attr_native_unit_of_measurement)
 
     @property
     def extra_state_attributes(self):
