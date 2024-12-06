@@ -72,7 +72,9 @@ class WemPortalApi:
         self.headers = {
             "User-Agent": "WeishauptWEMApp",
             "X-Api-Version": "2.0.0.0",
-            "Accept": "*/*",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Accept-Language": "de-DE,de",
         }
         self.scraping_mapper = {}
 
@@ -179,7 +181,7 @@ class WemPortalApi:
             "Name": self.username,
             "PasswordUTF8": self.password,
             "AppID": "com.weishaupt.wemapp",
-            "AppVersion": "2.0.2",
+            "AppVersion": "2.5",
             "ClientOS": "Android",
         }
         if self.session is not None:
