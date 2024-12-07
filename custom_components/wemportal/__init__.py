@@ -26,6 +26,7 @@ from .const import (
 from .coordinator import WemPortalDataUpdateCoordinator
 from .wemportalapi import WemPortalApi
 import homeassistant.helpers.entity_registry as entity_registry
+from homeassistant.helpers import device_registry as device_registry
 
 
 def get_wemportal_unique_id(config_entry_id: str, device_id: str, name: str):
@@ -73,6 +74,19 @@ async def migrate_unique_ids(
     if change:
         await coordinator.async_config_entry_first_refresh()
 
+# TODO: There is probably an easier way, should work for now
+async def get_integration_device_ids(hass, domain):
+    """Retrieve all device IDs for a specific integration domain."""
+    device_ids = []
+
+    for device in device_registry.async_get(hass).devices.values():
+        for identifier in device.identifiers:
+            if identifier[0] == domain:
+                device_ids.append(device.name)
+                break
+
+    return device_ids
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the wemportal component."""
@@ -93,10 +107,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
             ),
         )
-    # Creatie API object
 
+    # Currently we only support one device so we will take first device id
+    device_id = "0000"
+    device_ids = await get_integration_device_ids(hass, DOMAIN)
+    if not device_ids:
+        _LOGGER.warning(f"No devices found for {DOMAIN}. Starting first time initialization.")
+    else:
+        _LOGGER.info(f"Found devices for {DOMAIN}: {device_ids}")
+        device_id = device_ids[0]
+
+    # Creating API object
     api = WemPortalApi(
-        entry.data.get(CONF_USERNAME), entry.data.get(CONF_PASSWORD), entry.options
+        entry.data.get(CONF_USERNAME), entry.data.get(CONF_PASSWORD), device_id, entry.options
     )
     # Create custom coordinator
     coordinator = WemPortalDataUpdateCoordinator(
@@ -104,13 +127,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     await coordinator.async_config_entry_first_refresh()
-
-    # try:
-    #     version = entry.version
-    #     if version < 2:
-    #         await migrate_unique_ids(hass, entry, coordinator)
-    # except Exception:
-    #     await migrate_unique_ids(hass, entry, coordinator)
 
     # Is there an on_update function that we can add listener to?
     _LOGGER.info("Migrating entity names for wemportal")

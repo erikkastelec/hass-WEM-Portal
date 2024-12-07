@@ -1,6 +1,7 @@
 """ WemPortal integration coordinator """
 from __future__ import annotations
 from time import monotonic
+import copy
 
 import async_timeout
 from homeassistant.config_entries import ConfigEntry
@@ -10,10 +11,10 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 from .exceptions import ForbiddenError, ServerError, WemPortalError
-from .const import _LOGGER, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE, DEFAULT_TIMEOUT
+from .const import _LOGGER, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE, DEFAULT_TIMEOUT, DOMAIN
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from .wemportalapi import WemPortalApi
-
+from homeassistant.helpers import device_registry
 
 class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
     """DataUpdateCoordinator for wemportal component"""
@@ -38,6 +39,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
         self.last_try = None
         self.num_failed = 0
 
+
     async def _async_update_data(self):
         """Fetch data from the wemportal api"""
         if self.num_failed > 2 and monotonic() - self.last_try < DEFAULT_CONF_SCAN_INTERVAL_API_VALUE:
@@ -53,10 +55,13 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                 _LOGGER.warning("Creating new wemportal api instance", exc_info=exc)
                 # TODO: This is a temporary solution and should be removed when api cause from #28 is resolved
                 try:
+                    
                     new_api = WemPortalApi(
                         self.config_entry.data.get(CONF_USERNAME),
                         self.config_entry.data.get(CONF_PASSWORD),
+                        "0000",  # Doesn't matter as we will take it from existing data
                         self.config_entry.options,
+                        existing_data=copy.deepcopy(self.api.data)
                     )
                     del self.api
                     self.api = new_api

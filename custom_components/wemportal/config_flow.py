@@ -32,7 +32,7 @@ async def validate_input(hass: core.HomeAssistant, data):
     """Validate the user input allows us to connect."""
 
     # Create API object
-    api = WemPortalApi(data[CONF_USERNAME], data[CONF_PASSWORD])
+    api = WemPortalApi(data[CONF_USERNAME], data[CONF_PASSWORD], "0000")
 
     # Try to login
     try:

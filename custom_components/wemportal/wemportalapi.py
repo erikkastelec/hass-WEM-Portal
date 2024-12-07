@@ -26,23 +26,30 @@ from .exceptions import (
 
 from .const import (
     _LOGGER,
+    API_DATA_ACCESS_WRITE_URL,
+    API_DEVICE_READ_URL,
+    API_EVENT_TYPE_READ_URL,
+    API_LOGIN_URL,
+    API_REFRESH_URL,
     CONF_LANGUAGE,
     CONF_MODE,
     CONF_SCAN_INTERVAL_API,
-    START_URLS,
     DATA_GATHERING_ERROR,
     DEFAULT_CONF_LANGUAGE_VALUE,
     DEFAULT_CONF_MODE_VALUE,
     DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
     DEFAULT_CONF_SCAN_INTERVAL_VALUE,
+    WEB_LOGIN_URL,
+    WEB_MAIN_URL,
+    API_DATA_ACCESS_READ_URL
 )
 
 
 class WemPortalApi:
     """Wrapper class for Weishaupt WEM Portal"""
 
-    def __init__(self, username, password, config={}) -> None:
-        self.data = {}
+    def __init__(self, username, password, device_id, config={}, existing_data=None) -> None:
+        self.data = copy.deepcopy(existing_data) if existing_data else {device_id: {}}
         self.username = username
         self.password = password
         self.mode = config.get(CONF_MODE, DEFAULT_CONF_MODE_VALUE)
@@ -71,7 +78,7 @@ class WemPortalApi:
         # Headers used for all API calls
         self.headers = {
             "User-Agent": "WeishauptWEMApp",
-            "X-Api-Version": "2.0.0.0",
+            "X-Api-Version": "3.1.3.0",
             "Accept": "*/*",
         }
         self.scraping_mapper = {}
@@ -83,12 +90,14 @@ class WemPortalApi:
 
     def fetch_data(self):
         try:
-            # Login and get device info
-            if not self.valid_login:
-                self.api_login()
-            if len(self.data.keys()) == 0 or self.modules is None:
-                self.get_devices()
-                self.get_parameters()
+            if self.mode != "web":
+                # Login and get device info
+                if not self.valid_login:
+                    self.api_login()
+                # Fetch device and parameter data only at start
+                if self.modules is None:
+                    self.get_devices()
+                    self.get_parameters()
 
             # Select data source based on mode
             if self.mode == "web":
@@ -113,8 +122,8 @@ class WemPortalApi:
                 ):
                     # Get data by web scraping
                     try:
-                        webscrapint_data = self.fetch_webscraping_data()
-                        self.data[next(iter(self.data), "0000")] = webscrapint_data
+                        webscraping_data = self.fetch_webscraping_data()
+                        self.data[next(iter(self.data), "0000")] = webscraping_data
 
                         # Update last_scraping_update timestamp
                         self.last_scraping_update = datetime.now()
@@ -142,37 +151,65 @@ class WemPortalApi:
             raise WemPortalError from exc
 
     def fetch_webscraping_data(self):
-        """Call spider to crawl WEM Portal"""
+        """
+        Call spider to crawl WEM Portal.
+        This function manages the process of initiating a web scraping job, 
+        handling errors, and returning the scraped data.
+        """
+
+        # Set up the web scraping job with necessary parameters
         wemportal_job = scrapyscript.Job(
-            WemPortalSpider, self.username, self.password, self.webscraping_cookie
+            WemPortalSpider, 
+            self.username, 
+            self.password, 
+            self.webscraping_cookie
         )
+
+        # Initialize the processor for running the job
         processor = scrapyscript.Processor(settings=None)
+
         try:
+            # Attempt to run the scraping job and extract the first result
             data = processor.run([wemportal_job])[0]
+
         except IndexError as exc:
+            # Handle the case where the job result is not found
             self.spider_retry_count += 1
             if self.spider_retry_count == 2:
                 self.webscraping_cookie = None
             self.spider_wait_interval = self.spider_retry_count
             raise WemPortalError(DATA_GATHERING_ERROR) from exc
+
         except AuthError as exc:
+            # Handle authentication errors
             self.webscraping_cookie = None
             raise AuthError(
-                "AuthenticationError: Could not login with provided username and password. Check if your config contains the right credentials"
+                "AuthenticationError: Could not login with provided username and password. "
+                "Check if your config contains the right credentials"
             ) from exc
+
         except ExpiredSessionError as exc:
+            # Handle errors due to expired session
             self.webscraping_cookie = None
             raise ExpiredSessionError(
                 "ExpiredSessionError: Session expired. Next update will try to login again."
             ) from exc
+
         try:
-            self.webscraping_cookie = data["cookie"]
+            # Attempt to update the cookie from the scraped data
+            self.webscraping_cookiescraped_entity = data["cookie"]
             del data["cookie"]
         except KeyError:
+            # If the cookie is not found in the data, simply pass
             pass
+
+        # Reset retry count and wait interval after a successful operation
         self.spider_retry_count = 0
         self.spider_wait_interval = 0
+
+        # Return the scraped data
         return data
+
 
     def api_login(self):
         payload = {
@@ -189,7 +226,7 @@ class WemPortalApi:
         self.session.headers.update(self.headers)
         try:
             response = self.session.post(
-                "https://www.wemportal.com/app/Account/Login",
+                API_LOGIN_URL,
                 data=payload,
             )
             response.raise_for_status()
@@ -238,6 +275,7 @@ class WemPortalApi:
     ) -> reqs.Response:
         response = None
         try:
+            time.sleep(1)  # Wait 1 sec between requests to be graceful to the API. 
             if not headers:
                 headers = self.headers
             if not data:
@@ -274,9 +312,15 @@ class WemPortalApi:
         return response
 
     def get_devices(self):
+        # Check if device data is already present
+        if self.data and self.modules:
+            _LOGGER.debug("Device data is already cached.")
+            return
+
         _LOGGER.debug("Fetching api device data")
         self.modules = {}
-        data = self.make_api_call("https://www.wemportal.com/app/Device/Read").json()
+        self.data = {}
+        data = self.make_api_call(API_DEVICE_READ_URL).json()
 
         for device in data["Devices"]:
             self.data[device["ID"]] = {}
@@ -288,7 +332,6 @@ class WemPortalApi:
                     "Name": module["Name"],
                 }
             self.data[device["ID"]]["ConnectionStatus"] = device["ConnectionStatus"]
-
             # TODO: remove when we implement multiple device support
             break
 
@@ -302,6 +345,13 @@ class WemPortalApi:
             _LOGGER.debug(self.modules[device_id])
             delete_candidates = []
             for key, values in self.modules[device_id].items():
+                # Check if parameters are already cached
+                if "parameters" in values and values["parameters"]:
+                    _LOGGER.debug(
+                        "Parameters for device %s, index %s, and type %s are already cached.",
+                        device_id, values["Index"], values["Type"]
+                    )
+                    continue
                 data = {
                     "DeviceID": device_id,
                     "ModuleIndex": values["Index"],
@@ -309,7 +359,7 @@ class WemPortalApi:
                 }
                 try:
                     response = self.make_api_call(
-                        "https://www.wemportal.com/app/EventType/Read", data=data
+                        API_EVENT_TYPE_READ_URL, data=data
                     )
                 except WemPortalError as exc:
                     if isinstance(exc.__cause__, reqs.exceptions.HTTPError) and exc.__cause__.response.status_code == 400:
@@ -372,7 +422,7 @@ class WemPortalApi:
         headers = copy.deepcopy(self.headers)
         headers["Content-Type"] = "application/json"
         response = self.session.post(
-            "https://www.wemportal.com/app/DataAccess/Write",
+            API_DATA_ACCESS_WRITE_URL,
             headers=headers,
             data=json.dumps(data),
         )
@@ -661,10 +711,7 @@ class WemPortalApi:
             out = value.casefold()
         return out
 
-
 START_URLS = ["https://www.wemportal.com/Web/login.aspx"]
-
-
 class WemPortalSpider(Spider):
     name = "WemPortalSpider"
     start_urls = START_URLS
