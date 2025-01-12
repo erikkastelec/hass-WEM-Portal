@@ -60,7 +60,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                         self.config_entry.data.get(CONF_USERNAME),
                         self.config_entry.data.get(CONF_PASSWORD),
                         "0000",  # Doesn't matter as we will take it from existing data
-                        self.config_entry.options,
+                        config=self.config_entry.data,
                         existing_data=copy.deepcopy(self.api.data)
                     )
                     del self.api

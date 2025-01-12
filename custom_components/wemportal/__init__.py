@@ -28,7 +28,6 @@ from .wemportalapi import WemPortalApi
 import homeassistant.helpers.entity_registry as entity_registry
 from homeassistant.helpers import device_registry as device_registry
 
-
 def get_wemportal_unique_id(config_entry_id: str, device_id: str, name: str):
     """Return unique ID for WEM Portal."""
     return f"{config_entry_id}:{device_id}:{name}"
@@ -87,16 +86,15 @@ async def get_integration_device_ids(hass, domain):
 
     return device_ids
 
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the wemportal component."""
     # Set proper update_interval, based on selected mode
-    if entry.options.get(CONF_MODE) == "web":
+    if entry.data.get(CONF_MODE) == "web":
         update_interval = entry.options.get(
             CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE
         )
 
-    elif entry.options.get(CONF_MODE) == "api":
+    elif entry.data.get(CONF_MODE) == "api":
         update_interval = entry.options.get(
             CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
         )
@@ -119,7 +117,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Creating API object
     api = WemPortalApi(
-        entry.data.get(CONF_USERNAME), entry.data.get(CONF_PASSWORD), device_id, entry.options
+        entry.data.get(CONF_USERNAME),
+        entry.data.get(CONF_PASSWORD),
+        device_id,
+        config=entry.data
     )
     # Create custom coordinator
     coordinator = WemPortalDataUpdateCoordinator(

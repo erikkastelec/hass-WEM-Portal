@@ -15,6 +15,8 @@ from .const import (
     CONF_LANGUAGE,
     CONF_MODE,
     CONF_SCAN_INTERVAL_API,
+    DEFAULT_MODE,
+    AVAILABLE_MODES
 )
 from .exceptions import AuthError, UnknownAuthError
 
@@ -24,26 +26,40 @@ DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
+        vol.Required(CONF_MODE, default=DEFAULT_MODE): vol.In(AVAILABLE_MODES),
     }
 )
 
-
 async def validate_input(hass: core.HomeAssistant, data):
     """Validate the user input allows us to connect."""
-
+    
     # Create API object
-    api = WemPortalApi(data[CONF_USERNAME], data[CONF_PASSWORD], "0000")
+    api = WemPortalApi(data[CONF_USERNAME], data[CONF_PASSWORD], "placeholder")
 
-    # Try to login
-    try:
-        await hass.async_add_executor_job(api.api_login)
-    except AuthError:
-        raise InvalidAuth from AuthError
-    except UnknownAuthError:
-        raise CannotConnect from UnknownAuthError
+    # Try mobile API login
+    if data[CONF_MODE] == "api" or data[CONF_MODE] == "both":
+        try:
+            await hass.async_add_executor_job(api.api_login)
+        except AuthError:
+            # If API login fails, try WEB API login
+            _LOGGER.warning("Mobile API login failed, trying web login...")
+            try:
+                await hass.async_add_executor_job(api.web_login)
+            except AuthError as exc:
+                raise InvalidAuth from exc
+            except Exception as exc:
+                raise CannotConnect from exc
+        except UnknownAuthError as exc:
+            raise CannotConnect from exc
+    elif data[CONF_MODE] == "web":
+        try:
+            await hass.async_add_executor_job(api.web_login)
+        except AuthError as exc:
+            raise InvalidAuth from exc
+        except Exception as exc:
+            raise CannotConnect from exc
 
     return data
-
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for wemportal."""
@@ -109,24 +125,25 @@ class WemportalOptionsFlow(config_entries.OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Optional(
+                    vol.Required(
                         CONF_SCAN_INTERVAL,
                         default=self.config_entry.options.get(CONF_SCAN_INTERVAL, 1800),
                     ): config_validation.positive_int,
-                    vol.Optional(
+                    vol.Required(
                         CONF_SCAN_INTERVAL_API,
                         default=self.config_entry.options.get(
                             CONF_SCAN_INTERVAL_API, 300
                         ),
                     ): config_validation.positive_int,
-                    vol.Optional(
+                    vol.Required(
                         CONF_LANGUAGE,
                         default=self.config_entry.options.get(CONF_LANGUAGE, "en"),
                     ): config_validation.string,
-                    vol.Optional(
-                        CONF_MODE,
-                        default=self.config_entry.options.get(CONF_MODE, "api"),
-                    ): config_validation.string,
+                    
+                    vol.Required(
+                        CONF_MODE, default=self.config_entry.data.get(CONF_MODE, DEFAULT_MODE)
+                        ): vol.In(AVAILABLE_MODES),
+
                 }
             ),
         )
