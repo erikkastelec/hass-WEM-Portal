@@ -89,12 +89,12 @@ async def get_integration_device_ids(hass, domain):
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the wemportal component."""
     # Set proper update_interval, based on selected mode
-    if entry.data.get(CONF_MODE) == "web":
+    if entry.options.get(CONF_MODE) == "web":
         update_interval = entry.options.get(
             CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE
         )
 
-    elif entry.data.get(CONF_MODE) == "api":
+    elif entry.options.get(CONF_MODE) == "api":
         update_interval = entry.options.get(
             CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
         )
@@ -120,7 +120,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.data.get(CONF_USERNAME),
         entry.data.get(CONF_PASSWORD),
         device_id,
-        config=entry.data
+        config=entry.options
     )
     # Create custom coordinator
     coordinator = WemPortalDataUpdateCoordinator(

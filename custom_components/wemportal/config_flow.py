@@ -5,9 +5,16 @@ import logging
 
 import voluptuous as vol
 
-from homeassistant import config_entries, core, exceptions
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+
+from homeassistant import exceptions
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
-from homeassistant.core import callback
+from homeassistant.core import callback, HomeAssistant
 import homeassistant.helpers.config_validation as config_validation
 from .wemportalapi import WemPortalApi
 from .const import (
@@ -26,11 +33,11 @@ DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
-        vol.Required(CONF_MODE, default=DEFAULT_MODE): vol.In(AVAILABLE_MODES),
     }
 )
 
-async def validate_input(hass: core.HomeAssistant, data):
+
+async def validate_input(hass: HomeAssistant, data):
     """Validate the user input allows us to connect."""
     
     # Create API object
@@ -61,7 +68,7 @@ async def validate_input(hass: core.HomeAssistant, data):
 
     return data
 
-class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class ConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for wemportal."""
 
     VERSION = 2
@@ -69,7 +76,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(
-        config_entry: config_entries.ConfigEntry,
+        config_entry: ConfigEntry,
     ) -> WemportalOptionsFlow:
         """Get the options flow for this handler."""
         return WemportalOptionsFlow(config_entry)
@@ -109,10 +116,10 @@ class InvalidAuth(exceptions.HomeAssistantError):
     """Error to indicate there is invalid auth."""
 
 
-class WemportalOptionsFlow(config_entries.OptionsFlow):
+class WemportalOptionsFlow(OptionsFlow):
     """Handle options."""
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+    def __init__(self, config_entry: ConfigEntry) -> None:
         """Initialize options flow."""
         self.config_entry = config_entry
 
@@ -120,7 +127,7 @@ class WemportalOptionsFlow(config_entries.OptionsFlow):
         """Manage the options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
-
+        self.add_suggested_values_to_schema
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -141,9 +148,10 @@ class WemportalOptionsFlow(config_entries.OptionsFlow):
                     ): config_validation.string,
                     
                     vol.Required(
-                        CONF_MODE, default=self.config_entry.data.get(CONF_MODE, DEFAULT_MODE)
+                        CONF_MODE, default=self.config_entry.options.get(CONF_MODE, DEFAULT_MODE)
                         ): vol.In(AVAILABLE_MODES),
 
                 }
             ),
         )
+
