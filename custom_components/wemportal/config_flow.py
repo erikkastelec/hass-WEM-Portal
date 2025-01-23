@@ -33,6 +33,7 @@ DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
+        vol.Optional(CONF_MODE, default=DEFAULT_MODE): vol.In(AVAILABLE_MODES),
     }
 )
 
@@ -42,6 +43,8 @@ async def validate_input(hass: HomeAssistant, data):
     
     # Create API object
     api = WemPortalApi(data[CONF_USERNAME], data[CONF_PASSWORD], "placeholder")
+
+    
 
     # Try mobile API login
     if data[CONF_MODE] == "api" or data[CONF_MODE] == "both":
@@ -92,7 +95,12 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
                         return self.async_abort(reason="already_configured")
 
                 return self.async_create_entry(
-                    title=info[CONF_USERNAME], data=user_input
+                    title=info[CONF_USERNAME], data=user_input, options={
+                        CONF_SCAN_INTERVAL: 1800,
+                        CONF_SCAN_INTERVAL_API: 300,
+                        CONF_LANGUAGE: "en",
+                        CONF_MODE: user_input.get(CONF_MODE, DEFAULT_MODE)
+                        }
                 )
 
             except CannotConnect:
@@ -127,30 +135,28 @@ class WemportalOptionsFlow(OptionsFlow):
         """Manage the options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
-        self.add_suggested_values_to_schema
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Required(
+                    vol.Optional(
                         CONF_SCAN_INTERVAL,
                         default=self.config_entry.options.get(CONF_SCAN_INTERVAL, 1800),
                     ): config_validation.positive_int,
-                    vol.Required(
+                    vol.Optional(
                         CONF_SCAN_INTERVAL_API,
                         default=self.config_entry.options.get(
                             CONF_SCAN_INTERVAL_API, 300
                         ),
                     ): config_validation.positive_int,
-                    vol.Required(
+                    vol.Optional(
                         CONF_LANGUAGE,
                         default=self.config_entry.options.get(CONF_LANGUAGE, "en"),
                     ): config_validation.string,
                     
-                    vol.Required(
+                    vol.Optional(
                         CONF_MODE, default=self.config_entry.options.get(CONF_MODE, DEFAULT_MODE)
                         ): vol.In(AVAILABLE_MODES),
-
                 }
             ),
         )
