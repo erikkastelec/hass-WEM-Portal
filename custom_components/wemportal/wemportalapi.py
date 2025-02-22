@@ -9,6 +9,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 
+from bs4 import BeautifulSoup
 import requests as reqs
 import scrapyscript
 from fuzzywuzzy import fuzz
@@ -26,23 +27,30 @@ from .exceptions import (
 
 from .const import (
     _LOGGER,
+    API_DATA_ACCESS_WRITE_URL,
+    API_DEVICE_READ_URL,
+    API_EVENT_TYPE_READ_URL,
+    API_LOGIN_URL,
+    API_REFRESH_URL,
     CONF_LANGUAGE,
     CONF_MODE,
     CONF_SCAN_INTERVAL_API,
-    START_URLS,
     DATA_GATHERING_ERROR,
     DEFAULT_CONF_LANGUAGE_VALUE,
     DEFAULT_CONF_MODE_VALUE,
     DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
     DEFAULT_CONF_SCAN_INTERVAL_VALUE,
+    WEB_LOGIN_URL,
+    WEB_MAIN_URL,
+    API_DATA_ACCESS_READ_URL
 )
 
 
 class WemPortalApi:
     """Wrapper class for Weishaupt WEM Portal"""
 
-    def __init__(self, username, password, config={}) -> None:
-        self.data = {}
+    def __init__(self, username, password, device_id, config={}, existing_data=None) -> None:
+        self.data = copy.deepcopy(existing_data) if existing_data else {device_id: {}}
         self.username = username
         self.password = password
         self.mode = config.get(CONF_MODE, DEFAULT_CONF_MODE_VALUE)
@@ -71,8 +79,9 @@ class WemPortalApi:
         # Headers used for all API calls
         self.headers = {
             "User-Agent": "WeishauptWEMApp",
-            "X-Api-Version": "2.0.0.0",
+            "X-Api-Version": "3.1.3.0",
             "Accept": "*/*",
+            "Host": "www.wemportal.com"
         }
         self.scraping_mapper = {}
 
@@ -83,12 +92,14 @@ class WemPortalApi:
 
     def fetch_data(self):
         try:
-            # Login and get device info
-            if not self.valid_login:
-                self.api_login()
-            if len(self.data.keys()) == 0 or self.modules is None:
-                self.get_devices()
-                self.get_parameters()
+            if self.mode != "web":
+                # Login and get device info
+                if not self.valid_login:
+                    self.api_login()
+                # Fetch device and parameter data only at start
+                if self.modules is None:
+                    self.get_devices()
+                    self.get_parameters()
 
             # Select data source based on mode
             if self.mode == "web":
@@ -113,8 +124,8 @@ class WemPortalApi:
                 ):
                     # Get data by web scraping
                     try:
-                        webscrapint_data = self.fetch_webscraping_data()
-                        self.data[next(iter(self.data), "0000")] = webscrapint_data
+                        webscraping_data = self.fetch_webscraping_data()
+                        self.data[next(iter(self.data), "0000")] = webscraping_data
 
                         # Update last_scraping_update timestamp
                         self.last_scraping_update = datetime.now()
@@ -142,36 +153,63 @@ class WemPortalApi:
             raise WemPortalError from exc
 
     def fetch_webscraping_data(self):
-        """Call spider to crawl WEM Portal"""
+        """
+        Call spider to crawl WEM Portal.
+        This function manages the process of initiating a web scraping job, 
+        handling errors, and returning the scraped data.
+        """
+
+        # Set up the web scraping job with necessary parameters
         wemportal_job = scrapyscript.Job(
-            WemPortalSpider, self.username, self.password, self.webscraping_cookie
+            WemPortalSpider, 
+            self.username, 
+            self.password, 
+            self.webscraping_cookie
         )
+
+        # Initialize the processor for running the job
         processor = scrapyscript.Processor(settings=None)
+
         try:
+            # Attempt to run the scraping job and extract the first result
             data = processor.run([wemportal_job])[0]
+
         except IndexError as exc:
+            # Handle the case where the job result is not found
             self.spider_retry_count += 1
             if self.spider_retry_count == 2:
                 self.webscraping_cookie = None
             self.spider_wait_interval = self.spider_retry_count
             raise WemPortalError(DATA_GATHERING_ERROR) from exc
+
         except AuthError as exc:
+            # Handle authentication errors
             self.webscraping_cookie = None
             raise AuthError(
-                "AuthenticationError: Could not login with provided username and password. Check if your config contains the right credentials"
+                "AuthenticationError: Could not login with provided username and password. "
+                "Check if your config contains the right credentials"
             ) from exc
+
         except ExpiredSessionError as exc:
+            # Handle errors due to expired session
             self.webscraping_cookie = None
             raise ExpiredSessionError(
                 "ExpiredSessionError: Session expired. Next update will try to login again."
             ) from exc
+
         try:
-            self.webscraping_cookie = data["cookie"]
+            # Attempt to update the cookie from the scraped data
+            self.webscraping_cookiescraped_entity = data["cookie"]
             del data["cookie"]
         except KeyError:
+            # If the cookie is not found in the data, simply pass
             pass
+
+        # Reset retry count and wait interval after a successful operation
         self.spider_retry_count = 0
         self.spider_wait_interval = 0
+
+        # Return the scraped data
         return data
 
     def api_login(self):
@@ -189,7 +227,7 @@ class WemPortalApi:
         self.session.headers.update(self.headers)
         try:
             response = self.session.post(
-                "https://www.wemportal.com/app/Account/Login",
+                API_LOGIN_URL,
                 data=payload,
             )
             response.raise_for_status()
@@ -219,6 +257,70 @@ class WemPortalApi:
         # Everything went fine, set valid_login to True
         self.valid_login = True
 
+
+    def web_login(self):
+        """
+        Logs into the WEM Portal web interface by mimicking browser behavior.
+        Args:
+            username (str): The user's username (email).
+            password (str): The user's password.
+        Returns:
+            dict: Session cookies for the authenticated session.
+        Raises:
+            AuthError: If the login credentials are invalid.
+            ForbiddenError: If access is forbidden.
+            UnknownAuthError: For other unknown login errors.
+        """
+        session = reqs.Session()
+        login_url = "https://www.wemportal.com/Web/Login.aspx"
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "de,en;q=0.9",
+        }
+
+        # Step 1: Fetch the login page
+        try:
+            initial_response = session.get(login_url, headers=headers)
+            initial_response.raise_for_status()
+        except reqs.exceptions.HTTPError as exc:
+            raise UnknownAuthError("Failed to load the login page.") from exc
+
+        # Step 2: Parse the login page and extract hidden form fields
+        soup = BeautifulSoup(initial_response.text, "html.parser")
+        form_data = {}
+        for input_tag in soup.find_all("input"):
+            if input_tag.get("type") == "hidden" and input_tag.get("name"):
+                form_data[input_tag["name"]] = input_tag.get("value", "")
+
+        # Add username and password to the form data
+        form_data["ctl00$content$tbxUserName"] = self.username
+        form_data["ctl00$content$tbxPassword"] = self.password
+        form_data["ctl00$content$btnLogin"] = "Anmelden"  # Login button value
+
+        # Step 3: Submit the login form
+        try:
+            response = session.post(
+                login_url,
+                data=form_data,
+                headers={
+                    **headers,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+            response.raise_for_status()
+
+            # Step 4: Check if login was successful
+            if "ctl00_btnLogout" in response.text:
+                return
+            else:
+                raise AuthError("Login failed: Invalid username or password.")
+        except reqs.exceptions.HTTPError as exc:
+            if response.status_code == 403:
+                raise ForbiddenError("Access forbidden during login.") from exc
+            raise UnknownAuthError("Failed to submit the login form.") from exc
+
     def get_response_details(self, response: reqs.Response):
         server_status = ""
         server_message = ""
@@ -234,10 +336,11 @@ class WemPortalApi:
         return server_status, server_message
 
     def make_api_call(
-        self, url: str, headers=None, data=None, login_retry=False, delay=1
+        self, url: str, headers=None, data=None, do_retry=True, delay=5
     ) -> reqs.Response:
         response = None
         try:
+            time.sleep(1)  # Wait 1 sec between requests to be graceful to the API. 
             if not headers:
                 headers = self.headers
             if not data:
@@ -253,7 +356,7 @@ class WemPortalApi:
 
             response.raise_for_status()
         except Exception as exc:
-            if response and response.status_code in (401, 403) and not login_retry:
+            if response and response.status_code in (401, 403) and not do_retry:
                 self.api_login()
                 headers = headers or self.headers
                 time.sleep(delay)
@@ -261,7 +364,7 @@ class WemPortalApi:
                     url,
                     headers=headers,
                     data=data,
-                    login_retry=True,
+                    do_retry=False,
                     delay=delay,
                 )
             else:
@@ -274,9 +377,15 @@ class WemPortalApi:
         return response
 
     def get_devices(self):
+        # Check if device data is already present
+        if self.data and self.modules:
+            _LOGGER.debug("Device data is already cached.")
+            return
+
         _LOGGER.debug("Fetching api device data")
         self.modules = {}
-        data = self.make_api_call("https://www.wemportal.com/app/Device/Read").json()
+        self.data = {}
+        data = self.make_api_call(API_DEVICE_READ_URL, do_retry=True).json()
 
         for device in data["Devices"]:
             self.data[device["ID"]] = {}
@@ -288,7 +397,6 @@ class WemPortalApi:
                     "Name": module["Name"],
                 }
             self.data[device["ID"]]["ConnectionStatus"] = device["ConnectionStatus"]
-
             # TODO: remove when we implement multiple device support
             break
 
@@ -302,18 +410,26 @@ class WemPortalApi:
             _LOGGER.debug(self.modules[device_id])
             delete_candidates = []
             for key, values in self.modules[device_id].items():
+                # Check if parameters are already cached
+                if "parameters" in values and values["parameters"]:
+                    _LOGGER.debug(
+                        "Parameters for device %s, index %s, and type %s are already cached.",
+                        device_id, values["Index"], values["Type"]
+                    )
+                    continue
                 data = {
                     "DeviceID": device_id,
                     "ModuleIndex": values["Index"],
                     "ModuleType": values["Type"],
                 }
                 try:
+                    time.sleep(5) 
                     response = self.make_api_call(
-                        "https://www.wemportal.com/app/EventType/Read", data=data
+                        API_EVENT_TYPE_READ_URL, data=data, do_retry=False
                     )
                 except WemPortalError as exc:
-                    if isinstance(exc.__cause__, reqs.exceptions.HTTPError) and exc.__cause__.response.status_code == 400:
-                        _LOGGER.error("Could not fetch parameters for device %s for index %s and type %s", device_id,  values["Index"], values["Type"])
+                    if isinstance(exc.__cause__, reqs.exceptions.HTTPError) and (exc.__cause__.response.status_code == 400 or exc.__cause__.response.status_code == 403):
+                        _LOGGER.warning("Could not fetch parameters for device %s for index %s and type %s", device_id,  values["Index"], values["Type"])
                         delete_candidates.append((values["Index"], values["Type"]))
                         continue
                     else:
@@ -372,7 +488,7 @@ class WemPortalApi:
         headers = copy.deepcopy(self.headers)
         headers["Content-Type"] = "application/json"
         response = self.session.post(
-            "https://www.wemportal.com/app/DataAccess/Write",
+            API_DATA_ACCESS_WRITE_URL,
             headers=headers,
             data=json.dumps(data),
         )
@@ -421,9 +537,11 @@ class WemPortalApi:
                 "https://www.wemportal.com/app/DataAccess/Refresh",
                 data=data,
             )
+            time.sleep(5)
             values = self.make_api_call(
                 "https://www.wemportal.com/app/DataAccess/Read",
                 data=data,
+                do_retry=True
             ).json()
             # TODO: CLEAN UP
             # Map values to sensors we got during scraping.
@@ -661,10 +779,7 @@ class WemPortalApi:
             out = value.casefold()
         return out
 
-
 START_URLS = ["https://www.wemportal.com/Web/login.aspx"]
-
-
 class WemPortalSpider(Spider):
     name = "WemPortalSpider"
     start_urls = START_URLS
@@ -861,8 +976,28 @@ class WemPortalSpider(Spider):
                 except (IndexError, ValueError):
                     continue
 
-
         output["cookie"] = self.cookie
 
         yield output
 
+
+def extract_viewstate(response_text: str) -> str:
+    """
+    Extracts the __VIEWSTATE value from the HTML of the login page.
+    """
+    import re
+    match = re.search(r'id="__VIEWSTATE" value="(.*?)"', response_text)
+    if not match:
+        raise UnknownAuthError("Failed to extract __VIEWSTATE from login page.")
+    return match.group(1)
+
+
+def extract_eventvalidation(response_text: str) -> str:
+    """
+    Extracts the __EVENTVALIDATION value from the HTML of the login page.
+    """
+    import re
+    match = re.search(r'id="__EVENTVALIDATION" value="(.*?)"', response_text)
+    if not match:
+        raise UnknownAuthError("Failed to extract __EVENTVALIDATION from login page.")
+    return match.group(1)
