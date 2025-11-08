@@ -138,6 +138,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # "config": entry.data,
         "coordinator": coordinator,
     }
+
+    # Register the hub device so child devices can reference it via via_device
+    device_registry.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        manufacturer="Weishaupt",
+        name=entry.title or "WEM Portal",
+        model="WEM Portal",
+    )
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
 
