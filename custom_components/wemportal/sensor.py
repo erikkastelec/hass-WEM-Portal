@@ -64,6 +64,32 @@ async def async_setup_entry(
 class WemPortalSensor(CoordinatorEntity, SensorEntity):
     """Representation of a WEM Portal Sensor."""
 
+    def _validated_native_value(self, val, uom):
+        """Return a Home Assistant-safe native value."""
+        effective_uom = uom
+        if effective_uom in (None, ""):
+            effective_uom = getattr(self, "_attr_native_unit_of_measurement", None)
+        is_numeric_sensor = effective_uom not in (None, "")
+
+        if val is None:
+            _LOGGER.warning('Invalid sensor value for "%s": %r -> set to None', self._attr_name, val)
+            return None
+
+        if isinstance(val, str):
+            val = val.strip()
+            if val == "":
+                _LOGGER.warning('Invalid sensor value for "%s": %r -> set to None', self._attr_name, val)
+                return None
+
+        if is_numeric_sensor:
+            try:
+                float(val)
+            except (TypeError, ValueError):
+                _LOGGER.warning('Invalid numeric sensor value for "%s": %r -> set to None', self._attr_name, val)
+                return None
+
+        return val
+
     def __init__(
         self, coordinator, config_entry: ConfigEntry, device_id, _unique_id, entity_data
     ) -> None:
@@ -82,7 +108,7 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
         self._parameter_id = entity_data["ParameterID"]
         self._attr_icon = entity_data["icon"]
         self._attr_native_unit_of_measurement = uom
-        self._attr_native_value = val
+        self._attr_native_value = self._validated_native_value(val, uom)
         self._attr_should_poll = False
 
         _LOGGER.debug(f'Init sensor: {self._attr_name}: "{self._attr_native_value}" [{self._attr_native_unit_of_measurement}]')
@@ -118,8 +144,7 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
 
             entity_data = self.coordinator.data[self._device_id][self._attr_name]
             val, uom = fix_value_and_uom(entity_data["value"], entity_data["unit"])
-                    
-            self._attr_native_value = val
+            self._attr_native_value = self._validated_native_value(val, uom)
 
             # set uom if it references a valid non-trivial unit of measurement
             if not uom in (None, ""):
