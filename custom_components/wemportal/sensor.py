@@ -107,7 +107,7 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
         )
         self._parameter_id = entity_data["ParameterID"]
         self._attr_icon = entity_data["icon"]
-        self._attr_native_unit_of_measurement = uom
+        self._attr_native_unit_of_measurement = uom if uom != "" else None
         self._attr_native_value = self._validated_native_value(val, uom)
         self._attr_should_poll = False
 
@@ -146,8 +146,7 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
             val, uom = fix_value_and_uom(entity_data["value"], entity_data["unit"])
             self._attr_native_value = self._validated_native_value(val, uom)
 
-            # set uom if it references a valid non-trivial unit of measurement
-            if not uom in (None, ""):
+            if uom not in (None, ""):
                 self._attr_native_unit_of_measurement = uom
 
             _LOGGER.debug(f'Update sensor: {self._attr_name}: "{self._attr_native_value}" [{self._attr_native_unit_of_measurement}]')
