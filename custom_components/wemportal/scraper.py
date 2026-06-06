@@ -119,9 +119,10 @@ class WemPortalScraper:
                         
                         name = name_elems[0].replace("  ", "").replace(" ", "_").casefold()
                         name = header + "-" + name
-                        value = val_elems[0]
+                        original_value = val_elems[0].strip()
+                        value = original_value
                         
-                        split_value = value.split(" ")
+                        split_value = value.split(" ", 1)
                         unit = ""
                         if len(split_value) >= 2:
                             value = split_value[0]
@@ -133,12 +134,13 @@ class WemPortalScraper:
                             value = ".".join(value.split(","))
                             value = float(value)
                         except ValueError:
+                            # If it's not a number, revert to the full string
+                            value = original_value
+                            unit = None
                             if value in ["off", "Aus", "--", "Label ist null", "Label ist null "]:
                                 value = 0.0
                             elif value in ["Ein"]:
                                 value = 1.0
-                            else:
-                                unit = None
 
                         if not unit:
                             name_lower = name.lower()
