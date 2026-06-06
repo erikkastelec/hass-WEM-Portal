@@ -140,8 +140,12 @@ class WemPortalScraper:
                             else:
                                 unit = None
 
-                        if name.endswith('leistungsanforderung'):
-                            unit = '%'
+                        if not unit:
+                            name_lower = name.lower()
+                            if any(x in name_lower for x in ['temperatur', 'temperature', 'temp']):
+                                unit = '°C'
+                            elif any(x in name_lower for x in ['leistungsanforderung', 'drehzahl']):
+                                unit = '%'
 
                         icon_mapper = defaultdict(lambda: "mdi:flash")
                         icon_mapper["°C"] = "mdi:thermometer"
