@@ -1,0 +1,13 @@
+
+services:
+  homeassistant:
+    container_name: wemportal_dev
+    image: "ghcr.io/home-assistant/home-assistant:stable"
+    volumes:
+      - ./ha_config:/config
+      - ./custom_components:/config/custom_components
+    environment:
+      - TZ=Europe/Berlin
+    ports:
+      - "8123:8123"
+    restart: unless-stopped

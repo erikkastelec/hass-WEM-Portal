@@ -10,11 +10,12 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-from .exceptions import ForbiddenError, ServerError, WemPortalError
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import device_registry as dr
+from .exceptions import ForbiddenError, ServerError, WemPortalError, AuthError
 from .const import _LOGGER, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE, DEFAULT_TIMEOUT, DOMAIN
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.const import CONF_PASSWORD
 from .wemportalapi import WemPortalApi
-from homeassistant.helpers import device_registry
 
 class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
     """DataUpdateCoordinator for wemportal component"""
@@ -44,46 +45,27 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
         """Fetch data from the wemportal api"""
         if self.num_failed > 2 and monotonic() - self.last_try < DEFAULT_CONF_SCAN_INTERVAL_API_VALUE:
             raise UpdateFailed("Waiting for more time to pass before retrying")
+            
+        device_registry = dr.async_get(self.hass)
+        enabled_devices = []
+        for device_id in self.api.data.keys():
+            device_entry = device_registry.async_get_device(identifiers={(DOMAIN, str(device_id))})
+            if device_entry is not None and device_entry.disabled_by is not None:
+                _LOGGER.debug("Skipping disabled device %s", device_id)
+                continue
+            enabled_devices.append(device_id)
+
         async with async_timeout.timeout(DEFAULT_TIMEOUT):
             try:
-                x = await self.hass.async_add_executor_job(self.api.fetch_data)
+                x = await self.hass.async_add_executor_job(self.api.fetch_data, enabled_devices)
                 self.num_failed = 0
                 return x
-            except WemPortalError as exc:
+            except AuthError as exc:
                 self.num_failed += 1
-                # if isinstance(exc.__cause__, (ServerError, ForbiddenError)):
-                _LOGGER.warning("Creating new wemportal api instance", exc_info=exc)
-                # TODO: This is a temporary solution and should be removed when api cause from #28 is resolved
-                try:
-                    
-                    new_api = WemPortalApi(
-                        self.config_entry.data.get(CONF_USERNAME),
-                        self.config_entry.data.get(CONF_PASSWORD),
-                        "0000",  # Doesn't matter as we will take it from existing data
-                        config=self.config_entry.options,
-                        existing_data=copy.deepcopy(self.api.data)
-                    )
-                    del self.api
-                    self.api = new_api
-                except Exception as exc2:
-                    raise UpdateFailed from exc2
-                if isinstance(exc.__cause__, (ServerError, ForbiddenError)) and self.num_failed <= 1:
-                    try:
-                        x = await self.hass.async_add_executor_job(
-                            self.api.fetch_data
-                        )
-                        self.num_failed = 0
-                        return x
-                    except WemPortalError as exc2:
-                        self.num_failed += 1
-                        _LOGGER.error(
-                            "Error fetching data from wemportal", exc_info=exc2
-                        )
-                        raise UpdateFailed from exc2
-                else:
-                    raise UpdateFailed from exc
-                # else:
-                #     _LOGGER.error("Error fetching data from wemportal", exc_info=exc)
-                #     raise UpdateFailed from exc
+                _LOGGER.error("Authentication error, raising ConfigEntryAuthFailed: %s", exc)
+                raise ConfigEntryAuthFailed("WEM Portal authentication failed. Check your credentials.") from exc
+            except (WemPortalError, ForbiddenError) as exc:
+                self.num_failed += 1
+                raise UpdateFailed(f"Error fetching data from wemportal: {exc}") from exc
             finally:
                 self.last_try = monotonic()

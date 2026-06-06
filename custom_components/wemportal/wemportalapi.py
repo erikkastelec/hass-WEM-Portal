@@ -6,15 +6,11 @@ Weishaupt webscraping and API library
 import copy
 import json
 import time
-from collections import defaultdict
 from datetime import datetime, timedelta
 
 from bs4 import BeautifulSoup
 import requests as reqs
-import scrapyscript
-from fuzzywuzzy import fuzz
 from homeassistant.const import CONF_SCAN_INTERVAL
-from scrapy import FormRequest, Spider, Request
 from .exceptions import (
     AuthError,
     ForbiddenError,
@@ -27,11 +23,17 @@ from .exceptions import (
 
 from .const import (
     _LOGGER,
+    API_DATA_ACCESS_READ_URL,
     API_DATA_ACCESS_WRITE_URL,
     API_DEVICE_READ_URL,
     API_EVENT_TYPE_READ_URL,
     API_LOGIN_URL,
     API_REFRESH_URL,
+    API_DEVICE_STATUS_READ_URL,
+    API_CIRCUIT_TIMES_REFRESH_URL,
+    API_CIRCUIT_TIMES_READ_URL,
+    API_STATISTICS_REFRESH_URL,
+    API_STATISTICS_READ_URL,
     CONF_LANGUAGE,
     CONF_MODE,
     CONF_SCAN_INTERVAL_API,
@@ -40,17 +42,16 @@ from .const import (
     DEFAULT_CONF_MODE_VALUE,
     DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
     DEFAULT_CONF_SCAN_INTERVAL_VALUE,
-    WEB_LOGIN_URL,
-    WEB_MAIN_URL,
-    API_DATA_ACCESS_READ_URL
 )
 
 
 class WemPortalApi:
     """Wrapper class for Weishaupt WEM Portal"""
 
-    def __init__(self, username, password, device_id, config={}, existing_data=None) -> None:
-        self.data = copy.deepcopy(existing_data) if existing_data else {device_id: {}}
+    def __init__(self, username, password, config=None, existing_data=None) -> None:
+        if config is None:
+            config = {}
+        self.data = copy.deepcopy(existing_data) if existing_data else {}
         self.username = username
         self.password = password
         self.mode = config.get(CONF_MODE, DEFAULT_CONF_MODE_VALUE)
@@ -84,30 +85,47 @@ class WemPortalApi:
             "Host": "www.wemportal.com"
         }
         self.scraping_mapper = {}
+        self.last_statistics_fetch = 0.0
 
         # Used to keep track of how many update intervals to wait before retrying spider
         self.spider_wait_interval = 0
         # Used to keep track of the number of times the spider consecutively fails
         self.spider_retry_count = 0
+        self.api_version = None
 
-    def fetch_data(self):
+    def fetch_data(self, enabled_devices=None):
         try:
             if self.mode != "web":
                 # Login and get device info
                 if not self.valid_login:
                     self.api_login()
-                # Fetch device and parameter data only at start
+                # Fetch device and parameter data only at start, or recover missing metadata
                 if self.modules is None:
                     self.get_devices()
                     self.get_parameters()
+                else:
+                    needs_recovery = False
+                    for _, modules in self.modules.items():
+                        for module in modules.values():
+                            if "parameters" not in module:
+                                needs_recovery = True
+                                break
+                    if needs_recovery:
+                        _LOGGER.info("Attempting to recover missing parameter definitions...")
+                        self.get_parameters()
 
             # Select data source based on mode
             if self.mode == "web":
                 # Get data by web scraping
-                self.data[next(iter(self.data), "0000")] = self.fetch_webscraping_data()
+                webscraping_data = self.fetch_webscraping_data()
+                from .translations import translate
+                for key, value in webscraping_data.items():
+                    if isinstance(value, dict) and "friendlyName" in value:
+                        value["friendlyName"] = translate(self.language, value["friendlyName"])
+                self.data[next(iter(self.data), "0000")] = webscraping_data
             elif self.mode == "api":
                 # Get data using API
-                self.get_data()
+                self.get_data(enabled_devices)
             else:
                 # Get data using web scraping if it hasn't been updated recently,
                 # otherwise use API to get data
@@ -125,13 +143,18 @@ class WemPortalApi:
                     # Get data by web scraping
                     try:
                         webscraping_data = self.fetch_webscraping_data()
+                        from .translations import translate
+                        for key, value in webscraping_data.items():
+                            if isinstance(value, dict) and "friendlyName" in value:
+                                value["friendlyName"] = translate(self.language, value["friendlyName"])
                         self.data[next(iter(self.data), "0000")] = webscraping_data
 
                         # Update last_scraping_update timestamp
                         self.last_scraping_update = datetime.now()
                     except Exception as exc:
-                        _LOGGER.error(exc)
-
+                        _LOGGER.warning("Web scraper failed this cycle. Falling back to API only. Error: %s", exc)
+                        # We intentionally do not raise, so the API can still fetch the bulk of the data
+                        
                 else:
                     # Reduce spider_wait_interval by 1 if > 0
                     self.spider_wait_interval = (
@@ -140,39 +163,38 @@ class WemPortalApi:
                         else self.spider_wait_interval
                     )
 
-                # Get data using API
-                if self.last_scraping_update is not None:
-                    self.get_data()
+                # Get data using API (always run as a resilient fallback)
+                self.get_data(enabled_devices)
 
 
             # Return data
             return self.data
 
-        # Catch and raise any exceptions as a WemPortalError
         except Exception as exc:
-            raise WemPortalError from exc
+            if isinstance(exc, WemPortalError):
+                # Re-raise known errors so we don't wrap them twice
+                raise
+            # Wrap any unexpected python crashes to prevent HA from halting
+            raise WemPortalError("Unexpected error occurred while fetching data") from exc
 
     def fetch_webscraping_data(self):
         """
-        Call spider to crawl WEM Portal.
+        Call scraper to crawl WEM Portal.
         This function manages the process of initiating a web scraping job, 
         handling errors, and returning the scraped data.
         """
+        from .scraper import WemPortalScraper
 
         # Set up the web scraping job with necessary parameters
-        wemportal_job = scrapyscript.Job(
-            WemPortalSpider, 
+        scraper = WemPortalScraper(
             self.username, 
             self.password, 
             self.webscraping_cookie
         )
 
-        # Initialize the processor for running the job
-        processor = scrapyscript.Processor(settings=None)
-
         try:
             # Attempt to run the scraping job and extract the first result
-            data = processor.run([wemportal_job])[0]
+            data = scraper.scrape()[0]
 
         except IndexError as exc:
             # Handle the case where the job result is not found
@@ -199,7 +221,7 @@ class WemPortalApi:
 
         try:
             # Attempt to update the cookie from the scraped data
-            self.webscraping_cookiescraped_entity = data["cookie"]
+            self.webscraping_cookie = data["cookie"]
             del data["cookie"]
         except KeyError:
             # If the cookie is not found in the data, simply pass
@@ -231,7 +253,9 @@ class WemPortalApi:
                 data=payload,
             )
             response.raise_for_status()
+            _LOGGER.debug("API login successful for %s", self.username)
         except reqs.exceptions.HTTPError as exc:
+            _LOGGER.warning("API login failed for %s with HTTPError.", self.username)
             self.valid_login = False
             response_status, response_message = self.get_response_details(response)
             if response is None:
@@ -256,6 +280,10 @@ class WemPortalApi:
                 ) from exc
         # Everything went fine, set valid_login to True
         self.valid_login = True
+        try:
+            self.api_version = response.json().get("Version")
+        except ValueError:
+            pass
 
 
     def web_login(self):
@@ -272,7 +300,8 @@ class WemPortalApi:
             UnknownAuthError: For other unknown login errors.
         """
         session = reqs.Session()
-        login_url = "https://www.wemportal.com/Web/Login.aspx"
+        from .const import WEB_LOGIN_URL
+        login_url = WEB_LOGIN_URL
 
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
@@ -313,6 +342,7 @@ class WemPortalApi:
 
             # Step 4: Check if login was successful
             if "ctl00_btnLogout" in response.text:
+                _LOGGER.debug("WEB login successful for %s", self.username)
                 return
             else:
                 raise AuthError("Login failed: Invalid username or password.")
@@ -335,6 +365,7 @@ class WemPortalApi:
                 pass
         return server_status, server_message
 
+
     def make_api_call(
         self, url: str, headers=None, data=None, do_retry=True, delay=5
     ) -> reqs.Response:
@@ -342,21 +373,21 @@ class WemPortalApi:
         try:
             time.sleep(1)  # Wait 1 sec between requests to be graceful to the API. 
             if not headers:
-                headers = self.headers
+                headers = self.headers.copy()
             if not data:
-                _LOGGER.debug(f"Sending GET request to {url} with headers: {headers}")
-                response = self.session.get(url, headers=headers)
+                _LOGGER.debug("Sending GET request to %s with headers: %s", url, headers)
+                response = self.session.get(url, headers=headers, timeout=10)
             else:
                 headers["Content-Type"] = "application/json"
                 data = {k: v.encode('utf-8') if isinstance(v, str) else v for k, v in data.items()}
-                _LOGGER.debug(f"Sending POST request to {url} with headers: {headers} and data: {data}")
+                _LOGGER.debug("Sending POST request to %s with headers: %s and data: %s", url, headers, data)
                 response = self.session.post(
-                    url, headers=headers, data=json.dumps(data)
+                    url, headers=headers, data=json.dumps(data), timeout=10
                 )
 
             response.raise_for_status()
-        except Exception as exc:
-            if response and response.status_code in (401, 403) and not do_retry:
+        except reqs.exceptions.RequestException as exc:
+            if response and response.status_code in (401, 403) and do_retry:
                 self.api_login()
                 headers = headers or self.headers
                 time.sleep(delay)
@@ -388,27 +419,27 @@ class WemPortalApi:
         data = self.make_api_call(API_DEVICE_READ_URL, do_retry=True).json()
 
         for device in data["Devices"]:
-            self.data[device["ID"]] = {}
-            self.modules[device["ID"]] = {}
+            device_id_str = str(device["ID"])
+            self.data[device_id_str] = {}
+            self.modules[device_id_str] = {}
             for module in device["Modules"]:
-                self.modules[device["ID"]][(module["Index"], module["Type"])] = {
+                self.modules[device_id_str][(module["Index"], module["Type"])] = {
                     "Index": module["Index"],
                     "Type": module["Type"],
                     "Name": module["Name"],
                 }
-            self.data[device["ID"]]["ConnectionStatus"] = device["ConnectionStatus"]
-            # TODO: remove when we implement multiple device support
-            break
+            self.data[device_id_str]["ConnectionStatus"] = device["ConnectionStatus"]
 
     def get_parameters(self):
         assert self.modules is not None
-        for device_id in self.data.keys():
-            if self.data[device_id]["ConnectionStatus"] != 0:
+        for device_id, device_data in self.data.items():
+            if device_data["ConnectionStatus"] != 0:
                 continue
             _LOGGER.debug("Fetching api parameters data for device %s", device_id)
             _LOGGER.debug(self.data)
             _LOGGER.debug(self.modules[device_id])
             delete_candidates = []
+            forbidden_count = 0
             for key, values in self.modules[device_id].items():
                 # Check if parameters are already cached
                 if "parameters" in values and values["parameters"]:
@@ -418,23 +449,45 @@ class WemPortalApi:
                     )
                     continue
                 data = {
-                    "DeviceID": device_id,
+                    "DeviceID": int(device_id),
                     "ModuleIndex": values["Index"],
                     "ModuleType": values["Type"],
                 }
                 try:
-                    time.sleep(5) 
+                    time.sleep(5)
                     response = self.make_api_call(
                         API_EVENT_TYPE_READ_URL, data=data, do_retry=False
                     )
                 except WemPortalError as exc:
-                    if isinstance(exc.__cause__, reqs.exceptions.HTTPError) and (exc.__cause__.response.status_code == 400 or exc.__cause__.response.status_code == 403):
-                        _LOGGER.warning("Could not fetch parameters for device %s for index %s and type %s", device_id,  values["Index"], values["Type"])
-                        delete_candidates.append((values["Index"], values["Type"]))
-                        continue
-                    else:
-                        raise
-                _LOGGER.debug(response.json())
+                    if isinstance(exc.__cause__, reqs.exceptions.HTTPError):
+                        status_code = exc.__cause__.response.status_code
+                        if status_code == 403:
+                            forbidden_count += 1
+                            if forbidden_count >= 3:
+                                _LOGGER.error(
+                                    "Rate limited (403) three times while fetching parameters "
+                                    "for device %s. Aborting.",
+                                    device_id
+                                )
+                                raise ForbiddenError("Rate limited during get_parameters") from exc
+                            
+                            _LOGGER.warning(
+                                "Rate limit warning (403) for device %s module %s. Strike %s of 3.",
+                                device_id,
+                                values["Index"],
+                                forbidden_count
+                            )
+                            continue
+                        elif status_code == 400:
+                            _LOGGER.warning(
+                                "Module index %s type %s is unsupported by WEM Portal. "
+                                "Deleting from cache.",
+                                values["Index"],
+                                values["Type"]
+                            )
+                            delete_candidates.append((values["Index"], values["Type"]))
+                            continue
+                    raise
                 parameters = {}
                 try:
                     for parameter in response.json()["Parameters"]:
@@ -445,13 +498,14 @@ class WemPortalApi:
                         self.modules[device_id][(values["Index"], values["Type"])][
                             "parameters"
                         ] = parameters
-                except KeyError as exc:
-                    # TODO: make sure that we should fail here or should we just log and continue
-                    raise WemPortalError(
-                        "An error occurred while gathering parameters data. This issue should resolve by "
-                        "itself. If this problem persists, open an issue at "
-                        "https://github.com/erikkastelec/hass-WEM-Portal/issues'  "
-                    ) from exc
+                except KeyError:
+                    _LOGGER.warning(
+                        "An error occurred while gathering parameters data for module %s. Skipping this module. "
+                        "If this problem persists, open an issue at "
+                        "https://github.com/erikkastelec/hass-WEM-Portal/issues",
+                        values
+                    )
+                    continue
             for key in delete_candidates:
                 del self.modules[device_id][key]
 
@@ -468,7 +522,7 @@ class WemPortalApi:
         _LOGGER.debug("Changing value for %s", parameter_id)
 
         data = {
-            "DeviceID": device_id,
+            "DeviceID": int(device_id),
             "Modules": [
                 {
                     "ModuleIndex": int(module_index),
@@ -484,38 +538,92 @@ class WemPortalApi:
         }
         # _LOGGER.info(data)
 
-        # TODO: do this with self.make_api_call()
-        headers = copy.deepcopy(self.headers)
-        headers["Content-Type"] = "application/json"
-        response = self.session.post(
-            API_DATA_ACCESS_WRITE_URL,
-            headers=headers,
-            data=json.dumps(data),
-        )
-        if response.status_code in (401, 403) and login:
-            self.api_login()
-            self.change_value(
-                device_id,
-                parameter_id,
-                module_index,
-                module_type,
-                numeric_value,
-                login=False,
-            )
         try:
-            response.raise_for_status()
+            self.make_api_call(
+                API_DATA_ACCESS_WRITE_URL,
+                data=data,
+                do_retry=True
+            )
         except Exception as exc:
             raise ParameterChangeError(
-                "Error changing parameter %s value" % parameter_id
+                f"Error changing parameter {parameter_id} value"
             ) from exc
 
     # Refresh data and retrieve new data
-    def get_data(self):
-        _LOGGER.debug("Fetching fresh api data")
-        for device_id in self.data.keys():  # type: ignore
+    def get_data(self, enabled_devices=None):
+        _LOGGER.debug("Fetching fresh api data. enabled_devices=%s, self.data.keys()=%s", enabled_devices, list(self.data.keys()))
+        target_devices = enabled_devices if enabled_devices else list(self.data.keys())
+        _LOGGER.debug("Computed target_devices=%s", target_devices)
+        for device_id in target_devices:
+            _LOGGER.debug("Processing device_id=%s (type %s). Is in self.data? %s", device_id, type(device_id), str(device_id) in self.data)
+            if str(device_id) not in self.data:
+                continue
+                
+            # 1. Fetch Device Status First
+            try:
+                status_response = self.make_api_call(
+                    API_DEVICE_STATUS_READ_URL,
+                    data={"DeviceID": int(device_id)},
+                    do_retry=True
+                ).json()
+
+                status_map = {0: "online", 7: "wrong_secret", 8: "busy", 50: "offline"}
+                conn_status = status_map.get(status_response.get("ConnectionStatus", -1), "unknown")
+
+                self.data[device_id][f"{device_id}-ConnectionStatus"] = {
+                    "friendlyName": "Connection Status",
+                    "ParameterID": "ConnectionStatus",
+                    "unit": None,
+                    "value": conn_status,
+                    "IsWriteable": False,
+                    "DataType": -1,
+                    "ModuleIndex": -1,
+                    "ModuleType": -1,
+                    "platform": "sensor",
+                    "icon": "mdi:network"
+                }
+
+                errors = status_response.get("Errors", [])
+                has_errors = "Yes" if errors else "No"
+                error_msg = ", ".join([str(e) for e in errors]) if errors else "None"
+
+                self.data[device_id][f"{device_id}-HasErrors"] = {
+                    "friendlyName": "Has Errors",
+                    "ParameterID": "HasErrors",
+                    "unit": None,
+                    "value": has_errors,
+                    "IsWriteable": False,
+                    "DataType": -1,
+                    "ModuleIndex": -1,
+                    "ModuleType": -1,
+                    "platform": "sensor",
+                    "icon": "mdi:alert"
+                }
+
+                self.data[device_id][f"{device_id}-ErrorMessages"] = {
+                    "friendlyName": "Error Messages",
+                    "ParameterID": "ErrorMessages",
+                    "unit": None,
+                    "value": error_msg[:255],
+                    "IsWriteable": False,
+                    "DataType": -1,
+                    "ModuleIndex": -1,
+                    "ModuleType": -1,
+                    "platform": "sensor",
+                    "icon": "mdi:message-alert"
+                }
+
+                if conn_status != "online":
+                    _LOGGER.warning("Device %s is %s. Skipping data polling.", device_id, conn_status)
+                    continue
+
+            except Exception as exc:
+                _LOGGER.warning("Failed to fetch Device Status: %s", exc)
+
+            # 2. Proceed with data fetch
             try:
                 data = {
-                    "DeviceID": device_id,
+                    "DeviceID": int(device_id),
                     "Modules": [
                         {
                             "ModuleIndex": module["Index"],
@@ -526,478 +634,195 @@ class WemPortalApi:
                             ],
                         }
                         for module in self.modules[device_id].values()
+                        if "parameters" in module and module["parameters"]
                     ],
                 }
             except KeyError as exc:
-                _LOGGER.debug(DATA_GATHERING_ERROR, ": ")
-                _LOGGER.debug(self.modules[device_id])
+                _LOGGER.debug("%s: %s", DATA_GATHERING_ERROR, self.modules[device_id])
                 raise WemPortalError(DATA_GATHERING_ERROR) from exc
 
             self.make_api_call(
-                "https://www.wemportal.com/app/DataAccess/Refresh",
+                API_REFRESH_URL,
                 data=data,
             )
             time.sleep(5)
             values = self.make_api_call(
-                "https://www.wemportal.com/app/DataAccess/Read",
+                API_DATA_ACCESS_READ_URL,
                 data=data,
                 do_retry=True
             ).json()
-            # TODO: CLEAN UP
-            # Map values to sensors we got during scraping.
-            icon_mapper = defaultdict(lambda: "mdi:flash")
-            icon_mapper["°C"] = "mdi:thermometer"
-            for module in values["Modules"]:
-                for value in module["Values"]:
-                    name = (
-                        self.modules[device_id][
-                            (module["ModuleIndex"], module["ModuleType"])
-                        ]["Name"]
-                        + "-"
-                        + self.modules[device_id][
-                            (module["ModuleIndex"], module["ModuleType"])
-                        ]["parameters"][value["ParameterID"]]["ParameterID"]
-                    )
-                    module_data = module_data = self.modules[device_id][
-                        (module["ModuleIndex"], module["ModuleType"])
-                    ]["parameters"][value["ParameterID"]]
-                    data[name] = {
-                        "friendlyName": self.translate(
-                            self.language,
-                            self.friendly_name_mapper(value["ParameterID"]),
-                        ),
-                        "ParameterID": value["ParameterID"],
-                        "unit": value["Unit"],
-                        "value": value["NumericValue"],
-                        "IsWriteable": module_data["IsWriteable"],
-                        "DataType": module_data["DataType"],
-                        "ModuleIndex": module["ModuleIndex"],
-                        "ModuleType": module["ModuleType"],
-                    }
-                    if not value["NumericValue"]:
-                        data[name]["value"] = value["StringValue"]
-                    if self.modules[device_id][
-                        (module["ModuleIndex"], module["ModuleType"])
-                    ]["parameters"][value["ParameterID"]]["EnumValues"]:
-                        if value["StringValue"] in [
-                            "off",
-                            "Aus",
-                            "Label ist null",
-                            "Label ist null ",
-                        ]:
-                            data[name]["value"] = 0.0
-                        else:
-                            try:
-                                data[name]["value"] = float(value["StringValue"])
-                            except ValueError:
-                                data[name]["value"] = value["StringValue"]
-                    if data[name]["value"] in [
-                        "off",
-                        "Aus",
-                        "Label ist null",
-                        "Label ist null ",
-                    ]:
-                        data[name]["value"] = 0.0
+            from .mapper import WemPortalDataMapper
+            WemPortalDataMapper.process_api_values(
+                device_id=device_id,
+                values_json=values,
+                modules_dict=self.modules,
+                language=self.language,
+                scraping_mapper=self.scraping_mapper,
+                mode=self.mode,
+                api_data=self.data,
+            )
 
-                    if data[name]["IsWriteable"]:
-                        # NUMBER PLATFORM
-                        # Define common attributes
-                        common_attrs = {
-                            "friendlyName": data[name]["friendlyName"],
-                            "ParameterID": value["ParameterID"],
-                            "unit": value["Unit"],
-                            "icon": icon_mapper[value["Unit"]],
-                            "value": value["NumericValue"],
-                            "DataType": data[name]["DataType"],
-                            "ModuleIndex": module["ModuleIndex"],
-                            "ModuleType": module["ModuleType"],
-                        }
-
-                        # Process data based on platform type
-
-                        # NUMBER PLATFORM
-                        if data[name]["DataType"] == -1 or data[name]["DataType"] == 3:
-                            self.data[device_id][name] = {
-                                **common_attrs,
-                                "platform": "number",
-                                "min_value": float(module_data["MinValue"]),
-                                "max_value": float(module_data["MaxValue"]),
-                                "step": 0.5 if data[name]["DataType"] == -1 else 1,
-                            }
-                        # SELECT PLATFORM
-                        elif data[name]["DataType"] == 1:
-                            self.data[device_id][name] = {
-                                **common_attrs,
-                                "platform": "select",
-                                "options": [
-                                    x["Value"] for x in module_data["EnumValues"]
-                                ],
-                                "optionsNames": [
-                                    x["Name"] for x in module_data["EnumValues"]
-                                ],
-                            }
-                        # SWITCH PLATFORM
-                        elif data[name]["DataType"] == 2:
-                            try:
-                                if (
-                                    int(module_data["MinValue"]) == 0
-                                    and int(module_data["MaxValue"]) == 1
-                                ):
-                                    self.data[device_id][name] = {
-                                        **common_attrs,
-                                        "platform": "switch",
-                                    }
-                                else:
-                                    # Skip schedules
-                                    continue
-                            except (ValueError, TypeError):
-                                continue
-
-                            # Catches exception when converting to int when MinValur or MaxValue is Nones
-                            except Exception:
-                                continue
-
-                for key, value in data.items():
-                    if key not in ["DeviceID", "Modules"] and not value["IsWriteable"]:
-                        # Ony when mode == both. Combines data from web and api
-                        # Only for single device, don't know how to handle multiple devices with scraping yet
-                        if self.mode == "both" and len(self.data.keys()) < 2:
-                            try:
-                                temp = self.scraping_mapper[value["ParameterID"]]
-                            except KeyError:
-                                for scraped_entity in self.data[device_id].keys():
-                                    scraped_entity_id = self.data[device_id][
-                                        scraped_entity
-                                    ]["ParameterID"]
-                                    try:
-                                        if (
-                                            fuzz.ratio(
-                                                value["friendlyName"],
-                                                scraped_entity_id.split("-")[1],
-                                            )
-                                            >= 90
-                                        ):
-                                            self.scraping_mapper.setdefault(
-                                                value["ParameterID"], []
-                                            ).append(scraped_entity_id)
-                                    except IndexError:
-                                        pass
-                                # Check if empty
+            # 3. Fetch Heating Schedules (DataType == 6)
+            try:
+                for module in self.modules[device_id].values():
+                    module_index = module.get("Index")
+                    module_type = module.get("Type")
+                    if "parameters" in module:
+                        for param_id, param_data in module["parameters"].items():
+                            if param_data.get("DataType") == 6:  # WemDataType.PROGRAM
                                 try:
-                                    temp = self.scraping_mapper[value["ParameterID"]]
-                                except KeyError:
-                                    self.scraping_mapper[value["ParameterID"]] = [
-                                        value["friendlyName"]
-                                    ]
-
-                            finally:
-                                for scraped_entity in self.scraping_mapper[
-                                    value["ParameterID"]
-                                ]:
-                                    sensor_dict = {
-                                        "value": value.get("value"),
-                                        "name": self.data[device_id]
-                                        .get(scraped_entity, {})
-                                        .get("name"),
-                                        "unit": self.data[device_id]
-                                        .get(scraped_entity, {})
-                                        .get("unit", value.get("unit")),
-                                        "icon": self.data[device_id]
-                                        .get(scraped_entity, {})
-                                        .get(
-                                            "icon", icon_mapper.get(value.get("unit"))
-                                        ),
-                                        "friendlyName": scraped_entity,
-                                        "ParameterID": scraped_entity,
-                                        "platform": "sensor",
+                                    refresh_payload = {
+                                        "DeviceID": int(device_id),
+                                        "ModuleIndex": module_index,
+                                        "ModuleType": module_type,
+                                        "ParameterID": param_id
                                     }
 
-                                    self.data[device_id][scraped_entity] = sensor_dict
-                        else:
-                            self.data[device_id][key] = {
-                                "value": value["value"],
-                                "ParameterID": value["ParameterID"],
-                                "unit": value["unit"],
-                                "icon": icon_mapper[value["unit"]],
-                                "friendlyName": value["friendlyName"],
-                                "platform": "sensor",
-                            }
+                                    job_resp = self.make_api_call(
+                                        API_CIRCUIT_TIMES_REFRESH_URL,
+                                        data=refresh_payload,
+                                        do_retry=True
+                                    ).json()
 
-    def friendly_name_mapper(self, value):
-        friendly_name_dict = {
-            "pp_beginn": "party_beginn",
-            "pp_ende": "party_ende",
-            "pp_funktion": "party_funktion",
-            "pp_raumsoll": "party_raumsoll",
-            "aktraumsoll": "raumsolltemperatur",
-            "u_beginn": "urlaub_beginn",
-            "u_ende": "urlaub_ende",
-            "u_funktion": "urlaub_funktion",
-            "u_raumsoll": "urlasub_raumsoll",
-            "ww-push": "warmwasser_push",
-            "ww-program": "warmwasser_program",
-            "aktwwsoll": "warmwassersolltemperatur",
-            "leistung": "wärmeleistung",
-            "absenk": "absenktemperatur",
-            "absenkww": "absenk_warmwasser_temperatur",
-            "normalww": "normal_warmwasser_temperatur",
-            "komfort": "komforttemperatur",
-            "normal": "normaltemperatur",
-        }
-        try:
-            out = friendly_name_dict[value.casefold()]
-        except KeyError:
-            out = value.casefold()
-        return out
+                                    job_id = job_resp.get("JobID")
+                                    if job_id is None:
+                                        continue
 
-    def translate(self, language, value):
-        # TODO: Implement support for other languages.
-        value = value.lower()
-        translation_dict = {
-            "en": {
-                "außsentemperatur": "outside_temperature",
-                "aussentemperatur": "outside_temperature",
-                "raumtemperatur": "room_temperature",
-                "warmwassertemperatur": "hot_water_temperature",
-                "betriebsart": "operation_mode",
-                "vorlauftemperatur": "flow_temperature",
-                "anlagendruck": "system_pressure",
-                "kollektortemperatur": "collector_temperature",
-                "wärmeleistung": "heat_output",
-                "raumsolltemperatur": "room_setpoint_temperature",
-                "warmwasser_push": "hot_water_push",
-                "absenktemperatur": "reduced_temperature",
-                "absenk_warmwasser_temperatur": "reduced_hot_water_temperature",
-                "normal_warmwasser_temperatur": "normal_hot_water_temperature",
-                "komforttemperatur": "comfort_temperature",
-                "normaltemperatur": "normal_temperature",
-            }
-        }
-        try:
-            out = translation_dict[language][value.casefold()]
-        except KeyError:
-            out = value.casefold()
-        return out
+                                    time.sleep(2)  # Give backend time to build the schedule payload
 
-START_URLS = ["https://www.wemportal.com/Web/login.aspx"]
-class WemPortalSpider(Spider):
-    name = "WemPortalSpider"
-    start_urls = START_URLS
+                                    read_payload = {
+                                        "DeviceID": int(device_id),
+                                        "JobID": job_id,
+                                        "ModuleIndex": module_index,
+                                        "ModuleType": module_type,
+                                        "ParameterID": param_id
+                                    }
 
-    custom_settings = {
-        "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
-        "LOG_LEVEL": "ERROR",
-    }
+                                    schedule_resp = self.make_api_call(
+                                        API_CIRCUIT_TIMES_READ_URL,
+                                        data=read_payload,
+                                        do_retry=True
+                                    ).json()
 
-    def __init__(self, username, password, cookie=None, **kw):
-        self.username = username
-        self.password = password
-        self.cookie = cookie if cookie else {}
-        self.retry = None
-        super().__init__(**kw)
+                                    sensor_name = f"{module['Name']}-{param_id}"
+                                    if sensor_name not in self.data[device_id]:
+                                        from .translations import friendly_name_mapper, translate
+                                        self.data[device_id][sensor_name] = {
+                                            "friendlyName": translate(self.language, friendly_name_mapper(param_id)),
+                                            "ParameterID": param_id,
+                                            "unit": None,
+                                            "value": "Active",
+                                            "IsWriteable": False,
+                                            "DataType": 6,
+                                            "ModuleIndex": module_index,
+                                            "ModuleType": module_type,
+                                            "platform": "sensor",
+                                            "icon": "mdi:calendar-clock",
+                                        }
 
-    def start_requests(self):
-        # Check if we have a cookie/session. Skip to main website if we do.
-        if ".ASPXAUTH" in self.cookie:
-            return [
-                Request(
-                    "https://www.wemportal.com/Web/Default.aspx",
-                    headers={
-                        "Accept-Language": "en-US,en;q=0.5",
-                        "Connection": "keep-alive",
-                    },
-                    cookies=self.cookie,
-                    callback=self.check_valid_login,
-                )
-            ]
-        return [
-            Request("https://www.wemportal.com/Web/Login.aspx", callback=self.login)
-        ]
+                                    self.data[device_id][sensor_name]["CircuitTimesDay"] = schedule_resp.get("CircuitTimesDay", [])
+                                    self.data[device_id][sensor_name]["PossibleValues"] = schedule_resp.get("PossibleValues", [])
+                                    self.data[device_id][sensor_name]["value"] = "Active"
 
-    def login(self, response):
-        return [
-            FormRequest.from_response(
-                response,
-                formdata={
-                    "ctl00$content$tbxUserName": self.username,
-                    "ctl00$content$tbxPassword": self.password,
-                    "Accept-Language": "en-US,en;q=0.5",
-                },
-                callback=self.check_valid_login,
-            )
-        ]
+                                except Exception as exc:
+                                    _LOGGER.warning("Failed to fetch CircuitTimes for %s: %s", param_id, exc)
+            except Exception as exc:
+                _LOGGER.warning("Error processing CircuitTimes: %s", exc)
 
-    # Extract cookies from response.request.headers and convert them to dict
-    def get_cookies(self, response):
-        cookies = {}
-        response_cookies = response.request.headers.getlist("Cookie")
-        if len(response_cookies) > 0:
-            for cookie_entry in response_cookies[0].decode("utf-8").split("; "):
-                parts = cookie_entry.split("=")
-                if len(parts) == 2:
-                    cookie_name, cookie_value = parts
-                    cookies[cookie_name] = cookie_value
-            self.cookie = cookies
+        # 4. Fetch Energy Statistics (Rate limited)
+        self.get_statistics(enabled_devices)
 
-    # Check if login was successful. If not, return authErrorFlag
-    def check_valid_login(self, response):
-        if (
-            response.url.lower() == "https://www.wemportal.com/Web/Login.aspx".lower()
-            and not self.retry
-        ):
-            raise ExpiredSessionError(
-                "Scrapy spider session expired. Skipping one update cycle."
-            )
-
-        elif (
-            response.url.lower()
-            == "https://www.wemportal.com/Web/Login.aspx?AspxAutoDetectCookieSupport=1".lower()
-            or response.status != 200
-        ):
-            raise AuthError(
-                f"Authentication Error: Encountered an unknown authentication error. Received response code: {response.status_code}, response: {response.content}"
-            )
-
-        self.retry = None
-        # Wait 2 seconds so everything loads
-        time.sleep(2)
-        form_data = self.generate_form_data(response)
-        self.get_cookies(response)
-        cookie_string = ";".join(
-            [f"{key}={value}" for key, value in self.cookie.items()]
-        )
-        return FormRequest(
-            url="https://www.wemportal.com/Web/default.aspx",
-            formdata=form_data,
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Cookie": cookie_string,
-                "Accept-Language": "en-US,en;q=0.5",
-            },
-            method="POST",
-            callback=self.scrape_pages,
-        )
-
-    def generate_form_data(self, response):
-        """prepares form data for request, which simulates a click on "Expert" element in submenu"""
-        return {
-            "__EVENTVALIDATION": response.xpath("//*[@id='__EVENTVALIDATION']/@value")[
-                0
-            ].extract(),
-            "__VIEWSTATE": response.xpath("//*[@id='__VIEWSTATE']/@value")[0].extract(),
-            "__ECNPAGEVIEWSTATE": response.xpath(
-                "//*[@id='__ECNPAGEVIEWSTATE']/@value"
-            )[0].extract(),
-            "__EVENTTARGET": "ctl00$SubMenuControl1$subMenu",
-            "__EVENTARGUMENT": "3",
-            "ctl00_rdMain_ClientState": '{"Top":0,"Left":0,"DockZoneID":"ctl00_RDZParent","Collapsed":false,'
-            '"Pinned":false,"Resizable":false,"Closed":false,"Width":"99%","Height":null,'
-            '"ExpandedHeight":0,"Index":0,"IsDragged":false}',
-            "ctl00_SubMenuControl1_subMenu_ClientState": '{"logEntries":[{"Type":3},{"Type":1,"Index":"0","Data":{'
-            '"text":"Overview","value":"110"}},{"Type":1,"Index":"1",'
-            '"Data":{"text":"System:+dom","value":""}},{"Type":1,'
-            '"Index":"2","Data":{"text":"User","value":"222"}},'
-            '{"Type":1,"Index":"3","Data":{"text":"Expert",'
-            '"value":"223","selected":true}},{"Type":1,"Index":"4",'
-            '"Data":{"text":"Statistics","value":"225"}},{"Type":1,'
-            '"Index":"5","Data":{"text":"Data+Loggers","value":"224"}}],'
-            '"selectedItemIndex":"3"} ',
-        }
-
-    def scrape_pages(self, response):
-        # sleep for 5 seconds to get proper language and updated data
-        time.sleep(5)
-        _LOGGER.debug("Print expert page HTML: %s", response.text)
-        # if self.authErrorFlag != 0:
-        #     yield {"authErrorFlag": self.authErrorFlag}
-        output = {}
-        for div in response.xpath('//div[contains(@class, "RadPanelBar RadPanelBar_Default rpbSimpleData")]'):
-            header = div.xpath('.//th[contains(@class, "simpleDataHeaderTextCell")]/span/text()').get()
-            if header is not None:
-                header = (
-                    header.replace("/#", "")
-                    .replace("  ", "")
-                    .replace(" - ", "_")
-                    .replace("/*+/*", "_")
-                    .replace(" ", "_")
-                    .casefold()
-                )
-            else:
-                header = "unknown"
+    def get_statistics(self, enabled_devices=None):
+        """Fetch historical statistics from the API, rate limited to once per hour."""
+        now = time.time()
+        if self.last_statistics_fetch is not None and (now - self.last_statistics_fetch) < 3600:
+            return
+            
+        self.last_statistics_fetch = now
+        _LOGGER.debug("Fetching statistics data")
+        
+        target_devices = enabled_devices if enabled_devices else list(self.data.keys())
+        for device_id in target_devices:
+            if device_id not in self.data:
                 continue
-            for td in div.xpath('.//div[contains(@class, "rpTemplate")]/table[contains(@class, "simpleDataTable")]/tbody/tr'):
-                try:
-                    name = td.xpath('.//td[contains(@class, "simpleDataNameCell")]/span/text()').get()
-                    value = td.xpath('.//td[contains(@class, "simpleDataValueCell") or contains(@class, "simpleDataValueEnumCell")]/span/text()').get()
-                    if name is not None and value is not None:
-                        name = name.replace("  ", "").replace(" ", "_").casefold()
-                        name = header + "-" + name
-                        split_value = value.split(" ")
-                        unit = ""
-                        if len(split_value) >= 2:
-                            value = split_value[0]
-                            unit = split_value[1]
-                        else:
-                            value = split_value[0]
-                        try:
-                            value = ".".join(value.split(","))
-                            value = float(value)
-                        except ValueError:
-                            if value in [
-                                "off",
-                                "Aus",
-                                "--",
-                                "Label ist null",
-                                "Label ist null ",
-                            ]:
-                                value = 0.0
-                            elif value in [
-                                "Ein"
-                            ]:
-                                value = 1.0
-                            else:
-                                unit = None
-
-                        if(name.endswith('leistungsanforderung')):
-                            unit = '%'
-
-                        icon_mapper = defaultdict(lambda: "mdi:flash")
-                        icon_mapper["°C"] = "mdi:thermometer"
-
-                        output[name] = {
-                            "value": value,
-                            "name": name,
-                            "icon": icon_mapper[unit],
-                            "unit": unit,
-                            "platform": "sensor",
-                            "friendlyName": name,
-                            "ParameterID": name,
+            try:
+                refresh_resp = self.make_api_call(
+                    API_STATISTICS_REFRESH_URL,
+                    data={"DeviceID": int(device_id)},
+                    do_retry=True
+                ).json()
+                
+                group_types = refresh_resp.get("GroupTypeDescriptions", [])
+                headers = {"X-Api-Version": "2.0.0.0"}
+                
+                for group in group_types:
+                    group_id = group.get("GroupType")
+                    group_name = group.get("Description")
+                    if not group_name or group_name.strip() == "":
+                        fallback_names = {
+                            1: "Heating Energy Yield",
+                            2: "Hot Water Energy Yield",
+                            3: "Cooling Energy Yield",
+                            4: "Total Energy Yield",
+                            5: "Power Consumption Heating",
+                            6: "Power Consumption Hot Water",
+                            7: "Power Consumption Cooling",
+                            8: "Total Power Consumption"
                         }
-                except (IndexError, ValueError):
-                    continue
-
-        output["cookie"] = self.cookie
-
-        yield output
-
-
-def extract_viewstate(response_text: str) -> str:
-    """
-    Extracts the __VIEWSTATE value from the HTML of the login page.
-    """
-    import re
-    match = re.search(r'id="__VIEWSTATE" value="(.*?)"', response_text)
-    if not match:
-        raise UnknownAuthError("Failed to extract __VIEWSTATE from login page.")
-    return match.group(1)
-
-
-def extract_eventvalidation(response_text: str) -> str:
-    """
-    Extracts the __EVENTVALIDATION value from the HTML of the login page.
-    """
-    import re
-    match = re.search(r'id="__EVENTVALIDATION" value="(.*?)"', response_text)
-    if not match:
-        raise UnknownAuthError("Failed to extract __EVENTVALIDATION from login page.")
-    return match.group(1)
+                        group_name = fallback_names.get(group_id, f"Energy {group_id}")
+                    else:
+                        from .translations import translate
+                        translated_group = translate(self.language, group_name)
+                        if "energy" not in translated_group.lower():
+                            group_name = f"{translated_group} Energy"
+                        else:
+                            group_name = translated_group
+                    
+                    read_payload = {
+                        "DeviceID": int(device_id),
+                        "ModuleType": 7,
+                        "ModuleIndex": 0,
+                        "GroupType": group_id,
+                        "Type": 1
+                    }
+                    
+                    try:
+                        time.sleep(2)  # Avoid hammering the API
+                        stats_resp = self.make_api_call(
+                            API_STATISTICS_READ_URL,
+                            headers=headers,
+                            data=read_payload,
+                            do_retry=True
+                        ).json()
+                        
+                        values = stats_resp.get("Values", [])
+                        if not values:
+                            continue
+                            
+                        # The last value in the array is the current day's consumption
+                        latest_stat = values[-1]
+                        current_value = latest_stat.get("Value", 0.0)
+                        unit = stats_resp.get("Unit", "kWh")
+                        
+                        sensor_name = f"Energy_{group_id}"
+                        
+                        self.data[device_id][f"{device_id}-{sensor_name}"] = {
+                            "friendlyName": group_name,
+                            "ParameterID": sensor_name,
+                            "unit": unit,
+                            "value": current_value,
+                            "IsWriteable": False,
+                            "DataType": -1,
+                            "ModuleIndex": -1,
+                            "ModuleType": -1,
+                            "platform": "sensor",
+                            "icon": "mdi:lightning-bolt",
+                            "device_class": "energy",
+                            "state_class": "total_increasing"
+                        }
+                        
+                    except Exception as exc:
+                        _LOGGER.warning("Failed to fetch Statistics for group %s: %s", group_id, exc)
+                        
+            except Exception as exc:
+                _LOGGER.warning("Error processing Statistics: %s", exc)

@@ -9,34 +9,11 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.const import EntityCategory
 
 from .const import _LOGGER, DOMAIN
 from . import get_wemportal_unique_id
 from .utils import (fix_value_and_uom, uom_to_device_class, uom_to_state_class)
-
-
-async def async_setup_platform(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-    discovery_info=None,
-):
-    """Setup the Wem Portal sensor."""
-
-    coordinator = hass.data[DOMAIN]["coordinator"]
-    entities: list[WemPortalSensor] = []
-    for device_id, entity_data in coordinator.data.items():
-        for unique_id, values in entity_data.items():
-            if isinstance(values, int):
-                continue
-            if values["platform"] == "sensor":
-                entities.append(
-                    WemPortalSensor(
-                        coordinator, config_entry, device_id, unique_id, values
-                    )
-                )
-
-    async_add_entities(entities)
 
 
 async def async_setup_entry(
@@ -80,6 +57,8 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
             if val == "":
                 _LOGGER.warning('Invalid sensor value for "%s": %r -> set to None', self._attr_name, val)
                 return None
+            if val.startswith("{"):
+                return "Programmed"
 
         if is_numeric_sensor:
             try:
@@ -101,40 +80,48 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
         self._last_updated = None
         self._config_entry = config_entry
         self._device_id = device_id
-        self._attr_name = _unique_id
+        self._attr_has_entity_name = True
+        self._attr_name = entity_data.get("friendlyName", _unique_id)
         self._attr_unique_id = get_wemportal_unique_id(
-            self._config_entry.entry_id, str(self._device_id), str(self._attr_name)
+            self._config_entry.entry_id, str(self._device_id), str(_unique_id)
         )
         self._parameter_id = entity_data["ParameterID"]
+        self._data_key = _unique_id
         self._attr_icon = entity_data["icon"]
         self._attr_native_unit_of_measurement = uom
         self._attr_native_value = self._validated_native_value(val, uom)
         self._attr_should_poll = False
+        
+        self._attr_device_class = entity_data.get("device_class")
+        self._attr_state_class = entity_data.get("state_class")
 
-        _LOGGER.debug(f'Init sensor: {self._attr_name}: "{self._attr_native_value}" [{self._attr_native_unit_of_measurement}]')
+        _LOGGER.debug(
+            'Init sensor: %s: "%s" [%s]',
+            self._attr_name,
+            self._attr_native_value,
+            self._attr_native_unit_of_measurement
+        )
 
     @property
     def device_info(self) -> DeviceInfo:
         """Get device information."""
-        return {
+        info = {
             "identifiers": {
                 (DOMAIN, f"{self._config_entry.entry_id}:{str(self._device_id)}")
             },
             "via_device": (DOMAIN, self._config_entry.entry_id),
             "name": str(self._device_id),
             "manufacturer": "Weishaupt",
+            "model": "WEM Portal",
         }
+        if hasattr(self.coordinator.api, "api_version") and self.coordinator.api.api_version:
+            info["sw_version"] = self.coordinator.api.api_version
+        return info
 
     @property
     def available(self):
         """Return if entity is available."""
         return self.coordinator.last_update_success
-
-    # async def async_added_to_hass(self):
-    #     """When entity is added to hass."""
-    #     self.async_on_remove(
-    #         self.coordinator.async_add_listener(self._handle_coordinator_update)
-    #     )
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -142,15 +129,20 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
 
         try:
 
-            entity_data = self.coordinator.data[self._device_id][self._attr_name]
+            entity_data = self.coordinator.data[self._device_id][self._data_key]
             val, uom = fix_value_and_uom(entity_data["value"], entity_data["unit"])
             self._attr_native_value = self._validated_native_value(val, uom)
 
             # set uom if it references a valid non-trivial unit of measurement
-            if not uom in (None, ""):
+            if uom not in (None, ""):
                 self._attr_native_unit_of_measurement = uom
 
-            _LOGGER.debug(f'Update sensor: {self._attr_name}: "{self._attr_native_value}" [{self._attr_native_unit_of_measurement}]')
+            _LOGGER.debug(
+                'Update sensor: %s: "%s" [%s]', 
+                self._attr_name, 
+                self._attr_native_value, 
+                self._attr_native_unit_of_measurement
+            )
 
         except KeyError:
             self._attr_native_value = None
@@ -160,11 +152,24 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
         self.async_write_ha_state()
 
     @property
+    def entity_category(self):
+        """Return the entity category."""
+        if any(x in self._attr_unique_id for x in ["ConnectionStatus", "HasErrors", "ErrorMessages"]):
+            return EntityCategory.DIAGNOSTIC
+        return None
+
+    @property
     def device_class(self):
+        """Return the device class of the sensor."""
+        if self._attr_device_class is not None:
+            return self._attr_device_class
         return uom_to_device_class(self._attr_native_unit_of_measurement)
 
     @property
     def state_class(self):
+        """Return the state class of the sensor."""
+        if self._attr_state_class is not None:
+            return self._attr_state_class
         return uom_to_state_class(self._attr_native_unit_of_measurement)
 
     @property
@@ -173,9 +178,16 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
         attr = {}
         if self._last_updated is not None:
             attr["Last Updated"] = self._last_updated
+            
+        try:
+            entity_data = self.coordinator.data[self._device_id][self._data_key]
+            if "CircuitTimesDay" in entity_data:
+                attr["CircuitTimesDay"] = entity_data["CircuitTimesDay"]
+            if "PossibleValues" in entity_data:
+                attr["PossibleValues"] = entity_data["PossibleValues"]
+            if isinstance(entity_data.get("value"), str) and entity_data["value"].startswith("{"):
+                attr["Raw_JSON"] = entity_data["value"]
+        except KeyError:
+            pass
+            
         return attr
-
-    async def async_update(self):
-        """Update Entity
-        Only used by the generic entity update service."""
-        await self.coordinator.async_request_refresh()

@@ -52,39 +52,59 @@ async def migrate_unique_ids(
     for unique_id, values in data.items():
         if isinstance(values, int):
             continue
-        name_id = er.async_get_entity_id(values["platform"], DOMAIN, unique_id)
+            
         new_id = get_wemportal_unique_id(config_entry.entry_id, device_id, unique_id)
-        if name_id is not None:
-            _LOGGER.info(
-                f"Found entity with old id ({name_id}). Updating to new unique_id ({new_id})."
-            )
-            # check if there already is a new one
-            new_entity_id = er.async_get_entity_id(values["platform"], DOMAIN, new_id)
-            if new_entity_id is not None:
-                _LOGGER.info(
-                    "Found entity with old id and an entity with a new unique_id. Preserving old entity..."
-                )
-                er.async_remove(new_entity_id)
-            er.async_update_entity(
-                name_id,
-                new_unique_id=new_id,
-            )
-            change = True
+        
+        # Build a list of possible old unique_ids
+        friendly_name = values.get("friendlyName", "")
+        platform = values.get("platform", "sensor")
+        
+        possible_old_ids = []
+        if unique_id != "ConnectionStatus":
+            possible_old_ids.append(unique_id)
+            possible_old_ids.append(f"{device_id}-{unique_id}")
+            
+        if friendly_name:
+            possible_old_ids.append(friendly_name)
+            possible_old_ids.append(f"{device_id}-{friendly_name}")
+            possible_old_ids.append(get_wemportal_unique_id(config_entry.entry_id, device_id, friendly_name))
+            
+        parameter_id = values.get("ParameterID")
+        if parameter_id:
+            possible_old_ids.append(parameter_id)
+            possible_old_ids.append(f"{device_id}-{parameter_id}")
+            possible_old_ids.append(get_wemportal_unique_id(config_entry.entry_id, device_id, parameter_id))
+            
+        # Try to find an entity under any of these old ids
+        for old_id in possible_old_ids:
+            if not old_id:
+                continue
+            name_id = er.async_get_entity_id(platform, DOMAIN, old_id)
+            if name_id is not None:
+                new_entity_id = er.async_get_entity_id(platform, DOMAIN, new_id)
+                if new_entity_id is not None and new_entity_id != name_id:
+                    _LOGGER.info(
+                        "Found entity with old id and an entity with a new unique_id. Preserving old entity..."
+                    )
+                    er.async_remove(new_entity_id)
+                    
+                if old_id != new_id:
+                    _LOGGER.info(
+                        "Migrating entity %s from old id %s to new unique_id %s",
+                        name_id,
+                        old_id,
+                        new_id,
+                    )
+                    er.async_update_entity(
+                        name_id,
+                        new_unique_id=new_id,
+                    )
+                    change = True
+                break
+
     if change:
         await coordinator.async_config_entry_first_refresh()
 
-# TODO: There is probably an easier way, should work for now
-async def get_integration_device_ids(hass, domain):
-    """Retrieve all device IDs for a specific integration domain."""
-    device_ids = []
-
-    for device in device_registry.async_get(hass).devices.values():
-        for identifier in device.identifiers:
-            if identifier[0] == domain:
-                device_ids.append(device.name)
-                break
-
-    return device_ids
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the wemportal component."""
@@ -108,18 +128,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Currently we only support one device so we will take first device id
     device_id = "0000"
-    device_ids = await get_integration_device_ids(hass, DOMAIN)
+    dr = device_registry.async_get(hass)
+    devices = [
+        device
+        for device in dr.devices.values()
+        if entry.entry_id in device.config_entries
+    ]
+    device_ids = [device.name for device in devices]
     if not device_ids:
-        _LOGGER.warning(f"No devices found for {DOMAIN}. Starting first time initialization.")
+        _LOGGER.warning("No devices found for %s. Starting first time initialization.", DOMAIN)
     else:
-        _LOGGER.info(f"Found devices for {DOMAIN}: {device_ids}")
-        device_id = device_ids[0]
+        _LOGGER.info("Found devices for %s: %s", DOMAIN, device_ids)
 
     # Creating API object
     api = WemPortalApi(
         entry.data.get(CONF_USERNAME),
         entry.data.get(CONF_PASSWORD),
-        device_id,
         config=entry.options
     )
     # Create custom coordinator
@@ -155,6 +179,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Handle schema migrations."""
+    # V1 to V2 migration is a no-op for the data schema, as entity ID migration 
+    # is handled dynamically inside async_setup_entry via migrate_unique_ids.
     return True
 
 

@@ -14,30 +14,6 @@ from . import get_wemportal_unique_id
 from .utils import (fix_value_and_uom)
 
 
-async def async_setup_platform(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-    discovery_info=None,
-):
-    """Setup the Wem Portal select."""
-
-    coordinator = hass.data[DOMAIN]["coordinator"]
-    entities: list[WemPortalSwitch] = []
-    for device_id, entity_data in coordinator.data.items():
-        for unique_id, values in entity_data.items():
-            if isinstance(values, int):
-                continue
-            if values["platform"] == "switch":
-                entities.append(
-                    WemPortalSwitch(
-                        coordinator, config_entry, device_id, unique_id, values
-                    )
-                )
-
-    async_add_entities(entities)
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -80,21 +56,23 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
         self._last_updated = None
         self._config_entry = config_entry
         self._device_id = device_id
-        self._attr_name = _unique_id
+        self._attr_has_entity_name = True
+        self._attr_name = entity_data.get("friendlyName", _unique_id)
         self._attr_unique_id = get_wemportal_unique_id(
-            self._config_entry.entry_id, str(self._device_id), str(self._attr_name)
+            self._config_entry.entry_id, str(self._device_id), str(_unique_id)
         )
 
         self._parameter_id = entity_data["ParameterID"]
+        self._data_key = _unique_id
         self._attr_icon = entity_data["icon"]
         self._attr_unit = uom
-        self._attr_state = val
+        self._attr_is_on = (val == 1.0 or val == "on")
         self._attr_should_poll = False
         self._attr_device_class = "switch"  # type: ignore
         self._module_index = entity_data["ModuleIndex"]
         self._module_type = entity_data["ModuleType"]
 
-        _LOGGER.debug(f'Init switch: {self._attr_name}: "{self._attr_state}" [{self._attr_unit}]')
+        _LOGGER.debug('Init switch: %s: "%s" [%s]', self._attr_name, self._attr_is_on, self._attr_unit)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -117,7 +95,7 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
             self._module_type,
             1.0,
         )
-        self._attr_state = "on"  # type: ignore
+        self._attr_is_on = True
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
@@ -129,43 +107,25 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
             self._module_type,
             0.0,
         )
-        self._attr_state = "off"  # type: ignore
+        self._attr_is_on = False
         self.async_write_ha_state()
-
-    @property
-    def is_on(self) -> bool:
-        """Return the state of the switch."""
-        if self._attr_state == 1.0:
-            return True
-
-        return False
 
     @property
     def available(self):
         """Return if entity is available."""
         return self.coordinator.last_update_success
 
-    # async def async_added_to_hass(self):
-    #     """When entity is added to hass."""
-    #     self.async_on_remove(
-    #         self.coordinator.async_add_listener(self._handle_coordinator_update)
-    #     )
-
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-
         try:
-            temp_val = self.coordinator.data[self._device_id][self._attr_name]["value"]
-            if temp_val == 1:
-                self._attr_state = "on"  # type: ignore
-            else:
-                self._attr_state = "off"  # type: ignore
-
-            _LOGGER.debug(f'Update switch: {self._attr_name}: "{self._attr_state}" [{self._attr_unit}]')
+            temp_val = self.coordinator.data[self._device_id][self._data_key]["value"]
+            self._attr_is_on = (temp_val == 1)
+            
+            _LOGGER.debug('Update switch: %s: "%s" [%s]', self._attr_name, self._attr_is_on, self._attr_unit)
 
         except KeyError:
-            self._attr_state = None
+            self._attr_is_on = None
             _LOGGER.warning("Can't find %s", self._attr_unique_id)
             _LOGGER.debug("Sensor data %s", self.coordinator.data)
 
@@ -178,8 +138,3 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
         if self._last_updated is not None:
             attr["Last Updated"] = self._last_updated
         return attr
-
-    async def async_update(self):
-        """Update Entity
-        Only used by the generic entity update service."""
-        await self.coordinator.async_request_refresh()

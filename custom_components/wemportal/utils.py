@@ -1,14 +1,26 @@
-from homeassistant.components.sensor import (SensorDeviceClass, SensorStateClass)
-from homeassistant.const import (UnitOfEnergy, UnitOfPower, UnitOfVolumeFlowRate, UnitOfTemperature, UnitOfTime, UnitOfFrequency)
+"""Utility functions for WEM Portal."""
+
+from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+from homeassistant.const import (
+    UnitOfEnergy,
+    UnitOfPower,
+    UnitOfVolumeFlowRate,
+    UnitOfTemperature,
+    UnitOfTime,
+    UnitOfFrequency,
+)
 
 def fix_value_and_uom(val, uom):
     """
-    Translate WEM specific values and units of measurement to Home Assistent.
+    Translate WEM specific values and units of measurement to Home Assistant.
 
     This function returns:
-      * a valid Home Assistant UoM if it can be mapped (see: <https://github.com/home-assistant/core/blob/dev/homeassistant/const.py>)
-      * an empty string as UoM if the value is a number without any indication of its unit of measurement (e.g., a counter)
-      * None as UoM if the value is a string without any indication of its unit of measurement (e.g., a status text)
+      * a valid Home Assistant UoM if it can be mapped 
+        (see: https://github.com/home-assistant/core/blob/dev/homeassistant/const.py)
+      * an empty string as UoM if the value is a number without any indication 
+        of its unit of measurement (e.g., a counter)
+      * None as UoM if the value is a string without any indication 
+        of its unit of measurement (e.g., a status text)
     """
 
     # special case: volume flow rate
@@ -22,14 +34,10 @@ def fix_value_and_uom(val, uom):
     # special case: empty string for unit of measurement for a number
     if uom == "":
         try:
-            # return the value as a float and an empty string as unit of measurement
             return float(val), ""
         except ValueError:
-            # if the conversion to a float fails, return the value as a string and no unit of measurement
             return val, None
 
-    # remap the unit of measurement from WEM to a Home Assistant UoM
-    # see: <https://github.com/home-assistant/core/blob/dev/homeassistant/const.py>
     uom = {
         "":         None,
         "w":        UnitOfPower.WATT,

@@ -1,6 +1,14 @@
 """ Constants for the WEM Portal Integration """
 import logging
 from typing import Final
+from enum import IntEnum
+
+class WemDataType(IntEnum):
+    NUMBER_STEP_HALF = -1
+    SELECT = 1
+    SWITCH = 2
+    NUMBER_STEP_ONE = 3
+    PROGRAM = 6
 
 _LOGGER = logging.getLogger("custom_components.wemportal")
 DOMAIN: Final = "wemportal"
@@ -27,3 +35,8 @@ API_EVENT_TYPE_READ_URL: Final = "https://www.wemportal.com/app/EventType/Read"
 API_DATA_ACCESS_WRITE_URL: Final = "https://www.wemportal.com/app/DataAccess/Write"
 API_DATA_ACCESS_READ_URL: Final = "https://www.wemportal.com/app/DataAccess/Read"
 API_REFRESH_URL: Final = "https://www.wemportal.com/app/DataAccess/Refresh"
+API_DEVICE_STATUS_READ_URL: Final = "https://www.wemportal.com/app/DeviceStatus/Read"
+API_CIRCUIT_TIMES_REFRESH_URL: Final = "https://www.wemportal.com/app/CircuitTimes/Refresh"
+API_CIRCUIT_TIMES_READ_URL: Final = "https://www.wemportal.com/app/CircuitTimes/Read"
+API_STATISTICS_REFRESH_URL: Final = "https://www.wemportal.com/app/Statistics/Refresh"
+API_STATISTICS_READ_URL: Final = "https://www.wemportal.com/app/Statistics/Read"
