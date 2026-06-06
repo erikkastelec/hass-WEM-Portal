@@ -10,9 +10,9 @@
   ],
   "requirements": [
     "curl_cffi>=0.15.0",
-    "lxml>=4.9.0"
+    "lxml>=4.9.0",
+    "fuzzywuzzy>=0.18.0"
   ],
-  "loggers": ["scrapy"],
   "iot_class": "cloud_polling",
   "config_flow": true
 }
