@@ -6,7 +6,16 @@ from collections import defaultdict
 from curl_cffi import requests
 from lxml import html
 from custom_components.wemportal.exceptions import AuthError, ExpiredSessionError
-from custom_components.wemportal.const import WEB_LOGIN_URL, WEB_MAIN_URL
+from custom_components.wemportal.const import (
+    WEB_LOGIN_URL,
+    WEB_MAIN_URL,
+    MISSING_DATA_STRINGS,
+    BOOLEAN_OFF_STRINGS,
+    BOOLEAN_ON_STRINGS,
+    TEMPERATURE_KEYWORDS,
+    PERCENTAGE_KEYWORDS,
+    ENERGY_POWER_KEYWORDS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -137,19 +146,27 @@ class WemPortalScraper:
                             # If it's not a number, revert to the full string
                             value = original_value
                             unit = None
-                            if value in ["--", "Label ist null", "Label ist null "]:
-                                value = None
-                            elif value in ["off", "Aus"]:
-                                value = 0.0
-                            elif value in ["Ein"]:
-                                value = 1.0
 
                         if not unit:
                             name_lower = name.lower()
-                            if any(x in name_lower for x in ['temperatur', 'temperature', 'temp']):
+                            if any(x in name_lower for x in TEMPERATURE_KEYWORDS):
                                 unit = '°C'
-                            elif any(x in name_lower for x in ['leistungsanforderung', 'drehzahl', 'power_requirement', 'speed']):
+                            elif any(x in name_lower for x in PERCENTAGE_KEYWORDS):
                                 unit = '%'
+
+                        # Handle missing or boolean values
+                        value_lower = str(value).lower() if isinstance(value, str) else value
+                        if value_lower in MISSING_DATA_STRINGS:
+                            # Energy/Power sensors MUST be None to avoid Energy Dashboard spikes.
+                            name_lower = name.lower()
+                            if any(x in name_lower for x in ENERGY_POWER_KEYWORDS):
+                                value = None
+                            else:
+                                value = 0.0
+                        elif value_lower in BOOLEAN_OFF_STRINGS:
+                            value = 0.0
+                        elif value_lower in BOOLEAN_ON_STRINGS:
+                            value = 1.0
 
                         icon_mapper = defaultdict(lambda: "mdi:flash")
                         icon_mapper["°C"] = "mdi:thermometer"
