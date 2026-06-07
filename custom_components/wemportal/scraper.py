@@ -137,7 +137,9 @@ class WemPortalScraper:
                             # If it's not a number, revert to the full string
                             value = original_value
                             unit = None
-                            if value in ["off", "Aus", "--", "Label ist null", "Label ist null "]:
+                            if value in ["--", "Label ist null", "Label ist null "]:
+                                value = None
+                            elif value in ["off", "Aus"]:
                                 value = 0.0
                             elif value in ["Ein"]:
                                 value = 1.0

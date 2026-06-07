@@ -35,7 +35,7 @@ def fix_value_and_uom(val, uom):
     if uom == "":
         try:
             return float(val), ""
-        except ValueError:
+        except (ValueError, TypeError):
             return val, None
 
     uom = {
