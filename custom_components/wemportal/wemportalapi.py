@@ -4,7 +4,6 @@ Weishaupt webscraping and API library
 
 
 import copy
-import json
 import time
 from datetime import datetime, timedelta
 
@@ -369,42 +368,49 @@ class WemPortalApi:
     def make_api_call(
         self, url: str, headers=None, data=None, do_retry=True, delay=5
     ) -> reqs.Response:
+        attempts = 2 if do_retry else 1
         response = None
-        try:
-            time.sleep(1)  # Wait 1 sec between requests to be graceful to the API. 
-            if not headers:
-                headers = self.headers.copy()
-            if not data:
-                _LOGGER.debug("Sending GET request to %s with headers: %s", url, headers)
-                response = self.session.get(url, headers=headers, timeout=10)
-            else:
-                headers["Content-Type"] = "application/json"
-                data = {k: v.encode('utf-8') if isinstance(v, str) else v for k, v in data.items()}
-                _LOGGER.debug("Sending POST request to %s with headers: %s and data: %s", url, headers, data)
-                response = self.session.post(
-                    url, headers=headers, data=json.dumps(data), timeout=10
+
+        for attempt in range(attempts):
+            time.sleep(1)  # Wait 1 sec between requests to be graceful to the API.
+            current_headers = headers or self.headers.copy()
+
+            try:
+                if not data:
+                    _LOGGER.debug("Sending GET request to %s with headers: %s", url, current_headers)
+                    response = self.session.get(url, headers=current_headers, timeout=10)
+                else:
+                    _LOGGER.debug("Sending POST request to %s with headers: %s and data: %s", url, current_headers, data)
+                    response = self.session.post(url, headers=current_headers, json=data, timeout=10)
+
+                response.raise_for_status()
+
+                # Check for stealthy session expiration (HTML redirect)
+                if "Account/Login" in response.url or (hasattr(response, "redirect_url") and response.redirect_url and "Account/Login" in str(response.redirect_url)):
+                    raise ExpiredSessionError("Redirected to Account/Login")
+
+                _LOGGER.debug(response)
+                return response
+
+            except (reqs.exceptions.RequestException, ExpiredSessionError) as exc:
+                is_auth_error = isinstance(exc, ExpiredSessionError) or (
+                    isinstance(exc, reqs.exceptions.RequestException)
+                    and response
+                    and response.status_code in (401, 403)
                 )
 
-            response.raise_for_status()
-        except reqs.exceptions.RequestException as exc:
-            if response and response.status_code in (401, 403) and do_retry:
-                self.api_login()
-                headers = headers or self.headers
-                time.sleep(delay)
-                response = self.make_api_call(
-                    url,
-                    headers=headers,
-                    data=data,
-                    do_retry=False,
-                    delay=delay,
-                )
-            else:
+                if is_auth_error and attempt < attempts - 1:
+                    _LOGGER.info("Session expired for %s. Re-authenticating...", url)
+                    self.api_login()
+                    time.sleep(delay)
+                    continue  # Loop back around and retry
+
+                # If we're out of retries or it's a completely different error:
                 server_status, server_message = self.get_response_details(response)
                 raise WemPortalError(
                     f"{DATA_GATHERING_ERROR} Server returned status code: {server_status} and message: {server_message}"
                 ) from exc
 
-        _LOGGER.debug(response)
         return response
 
     def get_devices(self):
