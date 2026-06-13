@@ -252,7 +252,20 @@ class WemPortalApi:
                 data=payload,
             )
             response.raise_for_status()
+            
+            # Verify the response is actually valid JSON and successful
+            response_data = response.json()
+            if response_data.get("Status") != 0:
+                raise AuthError(f"Login failed: Server returned {response_data}")
+                
+            self.api_version = response_data.get("Version")
             _LOGGER.debug("API login successful for %s", self.username)
+            self.valid_login = True
+            
+        except ValueError as exc: # Catches JSONDecodeError if response is HTML
+            _LOGGER.warning("API login failed for %s. Received HTML instead of JSON.", self.username)
+            self.valid_login = False
+            raise WemPortalError("API login failed: received HTML instead of JSON (Possible rate limit or WAF block)") from exc
         except reqs.exceptions.HTTPError as exc:
             _LOGGER.warning("API login failed for %s with HTTPError.", self.username)
             self.valid_login = False
@@ -277,12 +290,6 @@ class WemPortalApi:
                 raise UnknownAuthError(
                     f"Authentication Error: Encountered an unknown authentication error. Received response code: {response.status_code}, response: {response.content}. Server returned internal status code: {response_status} and message: {response_message}"
                 ) from exc
-        # Everything went fine, set valid_login to True
-        self.valid_login = True
-        try:
-            self.api_version = response.json().get("Version")
-        except ValueError:
-            pass
 
 
     def web_login(self):
@@ -360,7 +367,7 @@ class WemPortalApi:
                 # Status we get back from server
                 server_status = response_data["Status"]
                 server_message = response_data["Message"]
-            except KeyError:
+            except (KeyError, ValueError):
                 pass
         return server_status, server_message
 
@@ -407,6 +414,12 @@ class WemPortalApi:
 
                 # If we're out of retries or it's a completely different error:
                 server_status, server_message = self.get_response_details(response)
+                
+                # The old logic recreated the entire API instance when this happened.
+                # To emulate that recovery mechanism without losing cached metadata,
+                # we invalidate the login state so the next cycle creates a fresh requests.Session.
+                self.valid_login = False
+                
                 raise WemPortalError(
                     f"{DATA_GATHERING_ERROR} Server returned status code: {server_status} and message: {server_message}"
                 ) from exc
@@ -647,26 +660,29 @@ class WemPortalApi:
                 _LOGGER.debug("%s: %s", DATA_GATHERING_ERROR, self.modules[device_id])
                 raise WemPortalError(DATA_GATHERING_ERROR) from exc
 
-            self.make_api_call(
-                API_REFRESH_URL,
-                data=data,
-            )
-            time.sleep(5)
-            values = self.make_api_call(
-                API_DATA_ACCESS_READ_URL,
-                data=data,
-                do_retry=True
-            ).json()
-            from .mapper import WemPortalDataMapper
-            WemPortalDataMapper.process_api_values(
-                device_id=device_id,
-                values_json=values,
-                modules_dict=self.modules,
-                language=self.language,
-                scraping_mapper=self.scraping_mapper,
-                mode=self.mode,
-                api_data=self.data,
-            )
+            try:
+                self.make_api_call(
+                    API_REFRESH_URL,
+                    data=data,
+                )
+                time.sleep(5)
+                values = self.make_api_call(
+                    API_DATA_ACCESS_READ_URL,
+                    data=data,
+                    do_retry=True
+                ).json()
+                from .mapper import WemPortalDataMapper
+                WemPortalDataMapper.process_api_values(
+                    device_id=device_id,
+                    values_json=values,
+                    modules_dict=self.modules,
+                    language=self.language,
+                    scraping_mapper=self.scraping_mapper,
+                    mode=self.mode,
+                    api_data=self.data,
+                )
+            except Exception as exc:
+                _LOGGER.warning("Failed to fetch parameter data... %s", exc)
 
             # 3. Fetch Heating Schedules (DataType == 6)
             try:

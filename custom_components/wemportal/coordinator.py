@@ -14,7 +14,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
 from .exceptions import ForbiddenError, ServerError, WemPortalError, AuthError
 from .const import _LOGGER, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE, DEFAULT_TIMEOUT, DOMAIN
-from homeassistant.const import CONF_PASSWORD
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from .wemportalapi import WemPortalApi
 
 class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
@@ -66,6 +66,14 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                 raise ConfigEntryAuthFailed("WEM Portal authentication failed. Check your credentials.") from exc
             except (WemPortalError, ForbiddenError) as exc:
                 self.num_failed += 1
+                if self.num_failed >= 2:
+                    _LOGGER.info("API errors persistent. Re-instantiating WemPortalApi to recover from potentially corrupted session/state.")
+                    self.api = WemPortalApi(
+                        self.config_entry.data.get(CONF_USERNAME),
+                        self.config_entry.data.get(CONF_PASSWORD),
+                        config=self.config_entry.options,
+                        existing_data=self.api.data
+                    )
                 raise UpdateFailed(f"Error fetching data from wemportal: {exc}") from exc
             finally:
                 self.last_try = monotonic()
