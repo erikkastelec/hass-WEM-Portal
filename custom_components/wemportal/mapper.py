@@ -204,11 +204,15 @@ class WemPortalDataMapper:
                         else:
                             api_data[device_id][scraped_entity] = sensor_dict
                 else:
+                    new_unit = sensor.get("unit")
+                    old_unit = api_data[device_id].get(key, {}).get("unit")
+                    final_unit = new_unit if new_unit is not None else old_unit
+                    
                     api_data[device_id][key] = {
                         "value": sensor["value"],
                         "ParameterID": sensor["ParameterID"],
-                        "unit": sensor["unit"],
-                        "icon": icon_mapper[sensor["unit"]],
+                        "unit": final_unit,
+                        "icon": icon_mapper.get(final_unit, "mdi:flash"),
                         "friendlyName": sensor["friendlyName"],
                         "platform": "sensor",
                     }

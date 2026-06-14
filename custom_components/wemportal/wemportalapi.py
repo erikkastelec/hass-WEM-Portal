@@ -117,11 +117,7 @@ class WemPortalApi:
             if self.mode == "web":
                 # Get data by web scraping
                 webscraping_data = self.fetch_webscraping_data()
-                from .translations import translate
-                for key, value in webscraping_data.items():
-                    if isinstance(value, dict) and "friendlyName" in value:
-                        value["friendlyName"] = translate(self.language, value["friendlyName"])
-                self.data[next(iter(self.data), "0000")] = webscraping_data
+                self._merge_webscraping_data(next(iter(self.data), "0000"), webscraping_data)
             elif self.mode == "api":
                 # Get data using API
                 self.get_data(enabled_devices)
@@ -142,11 +138,7 @@ class WemPortalApi:
                     # Get data by web scraping
                     try:
                         webscraping_data = self.fetch_webscraping_data()
-                        from .translations import translate
-                        for key, value in webscraping_data.items():
-                            if isinstance(value, dict) and "friendlyName" in value:
-                                value["friendlyName"] = translate(self.language, value["friendlyName"])
-                        self.data[next(iter(self.data), "0000")] = webscraping_data
+                        self._merge_webscraping_data(next(iter(self.data), "0000"), webscraping_data)
 
                         # Update last_scraping_update timestamp
                         self.last_scraping_update = datetime.now()
@@ -175,6 +167,25 @@ class WemPortalApi:
                 raise
             # Wrap any unexpected python crashes to prevent HA from halting
             raise WemPortalError("Unexpected error occurred while fetching data") from exc
+
+    def _merge_webscraping_data(self, device_id, webscraping_data):
+        if str(device_id) not in self.data:
+            self.data[str(device_id)] = {}
+            
+        from .translations import translate
+        for key, new_val in webscraping_data.items():
+            if isinstance(new_val, dict):
+                if "friendlyName" in new_val:
+                    new_val["friendlyName"] = translate(self.language, new_val["friendlyName"])
+                
+                # Preserve the old unit if the current scrape is missing it (e.g. value is "--")
+                # This prevents Home Assistant from complaining about unit changes.
+                if new_val.get("unit") is None:
+                    old_val = self.data[str(device_id)].get(key)
+                    if isinstance(old_val, dict) and old_val.get("unit") is not None:
+                        new_val["unit"] = old_val.get("unit")
+                        
+            self.data[str(device_id)][key] = new_val
 
     def fetch_webscraping_data(self):
         """
