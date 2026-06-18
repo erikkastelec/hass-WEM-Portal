@@ -39,20 +39,17 @@ Integration must be configured in Home Assistant frontend: Go to `Settings > Dev
 
 After Adding the integration, you can click `CONFIGURE` button to edit the default settings. Make sure to read what each setting does below.
 
-Configuration variables:
+Configuration variables during initial setup:
 
 - `username`: Email address used for logging into WEM Portal
 - `password`: Password used for logging into WEM Portal
-- `scan_interval (Optional)`: Defines update frequency of web scraping. Optional and in seconds (defaults to 30 min).
-  Setting update frequency below 15 min is not recommended.
-- `api_scan_interval (Optional)`: Defines update frequency for API data fetching. Optional and in seconds (defaults to 5
-  min, should not be lower than 3 min).
-- `language (
-  Optional)`: Defines preferred language. Use `en` for English translation or `de` for German. (defaults to en (
-  English))
-- `mode (Optional)`: Defines the mode of data fetching. Defaults to `api`, which gets the data available through the
-  mobile API. Option `web` gets only the data on the website, while option `both` queries website and api and provides
-  all the available data from both sources.
+- `language`: Defines preferred language for entity names. Select `en` for English translation or `de` for German. (defaults to en)
+- `mode`: Defines the mode of data fetching. Defaults to `api`, which gets the data available through the mobile API. Option `web` gets only the data on the website, while option `both` queries website and api and provides all the available data from both sources.
+
+Optional settings (available by clicking the `CONFIGURE` button after setup):
+
+- `scan_interval`: Defines update frequency of web scraping in seconds (defaults to 30 min). Setting update frequency below 15 min is not recommended.
+- `api_scan_interval`: Defines update frequency for API data fetching in seconds (defaults to 5 min, should not be lower than 3 min).
 
 
 ## Troubleshooting

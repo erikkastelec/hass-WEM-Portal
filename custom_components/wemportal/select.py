@@ -11,31 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, _LOGGER
 from . import get_wemportal_unique_id
-
-
-async def async_setup_platform(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    async_add_entities: AddEntitiesCallback,
-    discovery_info=None,
-):
-    """Setup the Wem Portal select."""
-
-    coordinator = hass.data[DOMAIN]["coordinator"]
-
-    entities: list[WemPortalSelect] = []
-    for device_id, entity_data in coordinator.data.items():
-        for unique_id, values in entity_data.items():
-            if isinstance(values, int):
-                continue
-            if values["platform"] == "select":
-                entities.append(
-                    WemPortalSelect(
-                        coordinator, config_entry, device_id, unique_id, values
-                    )
-                )
-
-    async_add_entities(entities)
+from fuzzywuzzy import process
 
 
 async def async_setup_entry(
@@ -72,17 +48,41 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
         self._last_updated = None
         self._config_entry = config_entry
         self._device_id = device_id
-        self._attr_name = _unique_id
+        self._attr_has_entity_name = True
+        self._attr_name = entity_data.get("friendlyName", _unique_id)
         self._attr_unique_id = get_wemportal_unique_id(
-            self._config_entry.entry_id, str(self._device_id), str(self._attr_name)
+            self._config_entry.entry_id, str(self._device_id), str(_unique_id)
         )
         self._parameter_id = entity_data["ParameterID"]
+        self._data_key = _unique_id
         self._attr_icon = entity_data["icon"]
         self._options = entity_data["options"]
         self._options_names = entity_data["optionsNames"]
         self._module_index = entity_data["ModuleIndex"]
         self._module_type = entity_data["ModuleType"]
-        self._attr_current_option = self._options_names[self._options.index( entity_data["value"])]
+        
+        try:
+            val = entity_data["value"]
+            if val in self._options_names:
+                self._attr_current_option = val
+            elif val in self._options:
+                self._attr_current_option = self._options_names[self._options.index(val)]
+            else:
+                try:
+                    self._attr_current_option = self._options_names[self._options.index(int(val))]
+                except (ValueError, TypeError):
+                    if val is not None and self._options_names:
+                        best_match, score = process.extractOne(str(val), self._options_names)
+                        if score >= 75:
+                            self._attr_current_option = best_match
+                        else:
+                            raise ValueError
+                    else:
+                        raise ValueError
+        except (ValueError, TypeError):
+            self._attr_current_option = None
+            _LOGGER.warning("Value %s not found in options %s (names: %s) for select %s", entity_data["value"], self._options, self._options_names, self._attr_name)
+        _LOGGER.debug('Init select: %s: "%s"', self._attr_name, self._attr_current_option)
 
     async def async_select_option(self, option: str) -> None:
         """Call the API to change the parameter value"""
@@ -104,7 +104,7 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
         """Get device information."""
         return {
             "identifiers": {
-                (DOMAIN, f"{self._config_entry.entry_id}:{str(self._device_id)}")
+                (DOMAIN, f"{self._config_entry.entry_id}:{self._device_id}")
             },
             "via_device": (DOMAIN, self._config_entry.entry_id),
             "name": str(self._device_id),
@@ -121,12 +121,6 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
         """Return list of available options."""
         return self._options_names
 
-    # async def async_added_to_hass(self):
-    #     """When entity is added to hass."""
-    #     self.async_on_remove(
-    #         self.coordinator.async_add_listener(self._handle_coordinator_update)
-    #     )
-
     @property
     def extra_state_attributes(self):
         """Return the state attributes of this device."""
@@ -140,15 +134,29 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
         """Handle updated data from the coordinator."""
 
         try:
-            self._attr_current_option = self._options_names[self._options.index( self.coordinator.data[self._device_id][self._attr_name]["value"])]
+            val = self.coordinator.data[self._device_id][self._data_key]["value"]
+            if val in self._options_names:
+                self._attr_current_option = val
+            elif val in self._options:
+                self._attr_current_option = self._options_names[self._options.index(val)]
+            else:
+                try:
+                    self._attr_current_option = self._options_names[self._options.index(int(val))]
+                except (ValueError, TypeError):
+                    if val is not None and self._options_names:
+                        best_match, score = process.extractOne(str(val), self._options_names)
+                        if score >= 75:
+                            self._attr_current_option = best_match
+                        else:
+                            raise ValueError
+                    else:
+                        raise ValueError
         except KeyError:
             self._attr_current_option = None
             _LOGGER.warning("Can't find %s", self._attr_unique_id)
             _LOGGER.debug("Sensor data %s", self.coordinator.data)
+        except (ValueError, TypeError):
+            self._attr_current_option = None
+            _LOGGER.warning("Value %s not found in options %s (names: %s) for select %s", val, self._options, self._options_names, self._attr_name)
 
         self.async_write_ha_state()
-
-    async def async_update(self):
-        """Update Entity
-        Only used by the generic entity update service."""
-        await self.coordinator.async_request_refresh()

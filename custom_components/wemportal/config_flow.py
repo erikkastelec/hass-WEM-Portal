@@ -8,7 +8,6 @@ import voluptuous as vol
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
-    ConfigFlowResult,
     OptionsFlow,
 )
 
@@ -23,9 +22,10 @@ from .const import (
     CONF_MODE,
     CONF_SCAN_INTERVAL_API,
     DEFAULT_MODE,
-    AVAILABLE_MODES
+    AVAILABLE_MODES,
+    DEFAULT_CONF_LANGUAGE_VALUE
 )
-from .exceptions import AuthError, UnknownAuthError
+from .exceptions import AuthError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +33,7 @@ DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_USERNAME): str,
         vol.Required(CONF_PASSWORD): str,
+        vol.Required(CONF_LANGUAGE, default=DEFAULT_CONF_LANGUAGE_VALUE): vol.In(["en", "de"]),
         vol.Optional(CONF_MODE, default=DEFAULT_MODE): vol.In(AVAILABLE_MODES),
     }
 )
@@ -40,38 +41,34 @@ DATA_SCHEMA = vol.Schema(
 
 async def validate_input(hass: HomeAssistant, data):
     """Validate the user input allows us to connect."""
-    
-    # Create API object
-    api = WemPortalApi(data[CONF_USERNAME], data[CONF_PASSWORD], "placeholder")
+    # Create API object for authentication check
+    api = WemPortalApi(data[CONF_USERNAME], data[CONF_PASSWORD])
 
-    
-
-    # Try mobile API login
-    if data[CONF_MODE] == "api" or data[CONF_MODE] == "both":
-        try:
-            await hass.async_add_executor_job(api.api_login)
-        except AuthError:
-            # If API login fails, try WEB API login
-            _LOGGER.warning("Mobile API login failed, trying web login...")
+    try:
+        if data[CONF_MODE] in ("api", "both"):
             try:
+                await hass.async_add_executor_job(api.api_login)
+            except AuthError:
+                _LOGGER.warning("Mobile API login failed, trying web login...")
                 await hass.async_add_executor_job(api.web_login)
-            except AuthError as exc:
-                raise InvalidAuth from exc
-            except Exception as exc:
-                raise CannotConnect from exc
-        except UnknownAuthError as exc:
-            raise CannotConnect from exc
-    elif data[CONF_MODE] == "web":
-        try:
+        elif data[CONF_MODE] == "web":
             await hass.async_add_executor_job(api.web_login)
-        except AuthError as exc:
-            raise InvalidAuth from exc
-        except Exception as exc:
-            raise CannotConnect from exc
+    except AuthError as exc:
+        raise InvalidAuth from exc
+    except Exception as exc:
+        raise CannotConnect from exc
 
     return data
 
-class ConfigFlow(ConfigFlow, domain=DOMAIN):
+class CannotConnect(exceptions.HomeAssistantError):
+    """Error to indicate we cannot connect."""
+
+
+class InvalidAuth(exceptions.HomeAssistantError):
+    """Error to indicate there is invalid auth."""
+
+
+class WemPortalConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for wemportal."""
 
     VERSION = 2
@@ -80,9 +77,9 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(
         config_entry: ConfigEntry,
-    ) -> WemportalOptionsFlow:
+    ):
         """Get the options flow for this handler."""
-        return WemportalOptionsFlow(config_entry)
+        return WemportalOptionsFlow()
 
     async def async_step_user(self, user_input=None):
         """Handle the initial step."""
@@ -98,7 +95,7 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
                     title=info[CONF_USERNAME], data=user_input, options={
                         CONF_SCAN_INTERVAL: 1800,
                         CONF_SCAN_INTERVAL_API: 300,
-                        CONF_LANGUAGE: "en",
+                        CONF_LANGUAGE: user_input.get(CONF_LANGUAGE, DEFAULT_CONF_LANGUAGE_VALUE),
                         CONF_MODE: user_input.get(CONF_MODE, DEFAULT_MODE)
                         }
                 )
@@ -116,20 +113,8 @@ class ConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
 
-class CannotConnect(exceptions.HomeAssistantError):
-    """Error to indicate we cannot connect."""
-
-
-class InvalidAuth(exceptions.HomeAssistantError):
-    """Error to indicate there is invalid auth."""
-
-
 class WemportalOptionsFlow(OptionsFlow):
     """Handle options."""
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
         """Manage the options."""
