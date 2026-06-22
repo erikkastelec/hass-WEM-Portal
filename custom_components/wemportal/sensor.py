@@ -2,7 +2,7 @@
 Sensor platform for wemportal component
 """
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorEntity, RestoreSensor
 from homeassistant.config_entries import ConfigEntry
 
 from homeassistant.core import HomeAssistant, callback
@@ -38,7 +38,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class WemPortalSensor(CoordinatorEntity, SensorEntity):
+class WemPortalSensor(CoordinatorEntity, RestoreSensor):
     """Representation of a WEM Portal Sensor."""
 
     def _validated_native_value(self, val, uom):
@@ -101,6 +101,15 @@ class WemPortalSensor(CoordinatorEntity, SensorEntity):
             self._attr_native_value,
             self._attr_native_unit_of_measurement
         )
+
+    async def async_added_to_hass(self) -> None:
+        """Call when entity about to be added to hass."""
+        await super().async_added_to_hass()
+        if (last_sensor_data := await self.async_get_last_sensor_data()) is not None:
+            if self._attr_native_unit_of_measurement in (None, ""):
+                self._attr_native_unit_of_measurement = last_sensor_data.native_unit_of_measurement
+                _LOGGER.debug("Restored unit %s for %s from previous session", 
+                              self._attr_native_unit_of_measurement, self._attr_name)
 
     @property
     def device_info(self) -> DeviceInfo:
