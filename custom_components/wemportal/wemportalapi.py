@@ -180,9 +180,9 @@ class WemPortalApi:
                 
                 # Preserve the old unit if the current scrape is missing it (e.g. value is "--")
                 # This prevents Home Assistant from complaining about unit changes.
-                if new_val.get("unit") is None:
+                if new_val.get("unit") in (None, ""):
                     old_val = self.data[str(device_id)].get(key)
-                    if isinstance(old_val, dict) and old_val.get("unit") is not None:
+                    if isinstance(old_val, dict) and old_val.get("unit") not in (None, ""):
                         new_val["unit"] = old_val.get("unit")
                         
             self.data[str(device_id)][key] = new_val

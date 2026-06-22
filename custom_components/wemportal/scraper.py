@@ -14,7 +14,12 @@ from custom_components.wemportal.const import (
     BOOLEAN_ON_STRINGS,
     TEMPERATURE_KEYWORDS,
     PERCENTAGE_KEYWORDS,
-    ENERGY_POWER_KEYWORDS,
+    ENERGY_KEYWORDS,
+    POWER_KEYWORDS,
+    FREQUENCY_KEYWORDS,
+    DURATION_KEYWORDS,
+    PRESSURE_KEYWORDS,
+    VOLUME_FLOW_KEYWORDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -153,13 +158,25 @@ class WemPortalScraper:
                                 unit = '°C'
                             elif any(x in name_lower for x in PERCENTAGE_KEYWORDS):
                                 unit = '%'
+                            elif any(x in name_lower for x in POWER_KEYWORDS):
+                                unit = 'kW'
+                            elif any(x in name_lower for x in ENERGY_KEYWORDS):
+                                unit = 'kWh'
+                            elif any(x in name_lower for x in FREQUENCY_KEYWORDS):
+                                unit = 'Hz'
+                            elif any(x in name_lower for x in DURATION_KEYWORDS):
+                                unit = 'h'
+                            elif any(x in name_lower for x in PRESSURE_KEYWORDS):
+                                unit = 'bar'
+                            elif any(x in name_lower for x in VOLUME_FLOW_KEYWORDS):
+                                unit = 'm3/h'
 
                         # Handle missing or boolean values
                         value_lower = str(value).lower() if isinstance(value, str) else value
                         if value_lower in MISSING_DATA_STRINGS:
                             # Energy/Power sensors MUST be None to avoid Energy Dashboard spikes.
                             name_lower = name.lower()
-                            if any(x in name_lower for x in ENERGY_POWER_KEYWORDS):
+                            if any(x in name_lower for x in ENERGY_KEYWORDS) or any(x in name_lower for x in POWER_KEYWORDS):
                                 value = None
                             else:
                                 value = 0.0

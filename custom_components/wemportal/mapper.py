@@ -206,7 +206,7 @@ class WemPortalDataMapper:
                 else:
                     new_unit = sensor.get("unit")
                     old_unit = api_data[device_id].get(key, {}).get("unit")
-                    final_unit = new_unit if new_unit is not None else old_unit
+                    final_unit = new_unit if new_unit not in (None, "") else old_unit
                     
                     api_data[device_id][key] = {
                         "value": sensor["value"],
