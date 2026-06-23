@@ -66,7 +66,7 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
         self._data_key = _unique_id
         self._attr_icon = entity_data["icon"]
         self._attr_unit = uom
-        self._attr_is_on = (val == 1.0 or val == "on")
+        self._attr_is_on = (val in [1, 1.0, "On", "on", "Ein", "ein"])
         self._attr_should_poll = False
         self._attr_device_class = "switch"  # type: ignore
         self._module_index = entity_data["ModuleIndex"]
@@ -120,7 +120,7 @@ class WemPortalSwitch(CoordinatorEntity, SwitchEntity):
         """Handle updated data from the coordinator."""
         try:
             temp_val = self.coordinator.data[self._device_id][self._data_key]["value"]
-            self._attr_is_on = (temp_val == 1)
+            self._attr_is_on = (temp_val in [1, 1.0, "On", "on", "Ein", "ein"])
             
             _LOGGER.debug('Update switch: %s: "%s" [%s]', self._attr_name, self._attr_is_on, self._attr_unit)
 

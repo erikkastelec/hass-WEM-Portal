@@ -184,6 +184,13 @@ class WemPortalApi:
                     old_val = self.data[str(device_id)].get(key)
                     if isinstance(old_val, dict) and old_val.get("unit") not in (None, ""):
                         new_val["unit"] = old_val.get("unit")
+
+                # Preserve the old value if the current scrape is missing it
+                # This prevents energy/power sensors from dropping to Unknown and creating gaps
+                if new_val.get("value") is None:
+                    old_val = self.data[str(device_id)].get(key)
+                    if isinstance(old_val, dict) and old_val.get("value") is not None:
+                        new_val["value"] = old_val.get("value")
                         
             self.data[str(device_id)][key] = new_val
 
@@ -834,10 +841,18 @@ class WemPortalApi:
                             
                         # The last value in the array is the current day's consumption
                         latest_stat = values[-1]
-                        current_value = latest_stat.get("Value", 0.0)
-                        unit = stats_resp.get("Unit", "kWh")
+                        current_value = latest_stat.get("Value")
                         
                         sensor_name = f"Energy_{group_id}"
+                        
+                        if current_value is None:
+                            old_sensor = self.data.get(device_id, {}).get(f"{device_id}-{sensor_name}")
+                            if isinstance(old_sensor, dict) and old_sensor.get("value") is not None:
+                                current_value = old_sensor.get("value")
+                            else:
+                                current_value = 0.0
+                                
+                        unit = stats_resp.get("Unit", "kWh")
                         
                         self.data[device_id][f"{device_id}-{sensor_name}"] = {
                             "friendlyName": group_name,

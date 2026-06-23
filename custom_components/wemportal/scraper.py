@@ -164,9 +164,9 @@ class WemPortalScraper:
                             else:
                                 value = 0.0
                         elif value_lower in BOOLEAN_OFF_STRINGS:
-                            value = 0.0
+                            value = 0.0 if unit else "Off"
                         elif value_lower in BOOLEAN_ON_STRINGS:
-                            value = 1.0
+                            value = 1.0 if unit else "On"
 
                         icon_mapper = defaultdict(lambda: "mdi:flash")
                         icon_mapper["°C"] = "mdi:thermometer"

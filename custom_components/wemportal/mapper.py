@@ -5,12 +5,14 @@ from .translations import friendly_name_mapper, translate
 from .const import WemDataType
 
 
-def sanitize_value(value_str):
+def sanitize_value(value_str, unit=None):
     """Sanitize typical German strings or off states to numeric values."""
-    if value_str in ["off", "Aus", "Label ist null", "Label ist null ", "--"]:
+    if value_str in ["Label ist null", "Label ist null ", "--"]:
         return 0.0
-    if value_str in ["Ein"]:
-        return 1.0
+    if value_str in ["off", "Aus", "aus"]:
+        return 0.0 if unit else "Off"
+    if value_str in ["Ein", "ein", "on", "On"]:
+        return 1.0 if unit else "On"
     try:
         return float(value_str)
     except ValueError:
@@ -76,10 +78,10 @@ class WemPortalDataMapper:
                 final_value = numeric_val if numeric_val is not None else string_val
 
                 if parameter.get("EnumValues"):
-                    final_value = sanitize_value(string_val)
+                    final_value = sanitize_value(string_val, value.get("Unit"))
                 else:
                     if isinstance(final_value, str):
-                        final_value = sanitize_value(final_value)
+                        final_value = sanitize_value(final_value, value.get("Unit"))
 
                 is_writeable = parameter.get("IsWriteable", False)
                 data_type = parameter.get("DataType")
