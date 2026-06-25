@@ -10,6 +10,36 @@ from homeassistant.const import (
     UnitOfFrequency,
 )
 
+from .const import (
+    MISSING_DATA_STRINGS,
+    BOOLEAN_OFF_STRINGS,
+    BOOLEAN_ON_STRINGS,
+    ENERGY_POWER_KEYWORDS
+)
+
+def sanitize_value(value_str, unit=None, name=""):
+    """Sanitize typical German strings or off states to numeric values based on constants."""
+    if not isinstance(value_str, str):
+        return value_str
+        
+    val_lower = value_str.lower().strip()
+    
+    if val_lower in [x.strip() for x in MISSING_DATA_STRINGS]:
+        name_lower = name.lower()
+        if any(x in name_lower for x in ENERGY_POWER_KEYWORDS):
+            return None
+        return 0.0
+    
+    if val_lower in BOOLEAN_OFF_STRINGS:
+        return 0.0 if unit else "Off"
+    if val_lower in BOOLEAN_ON_STRINGS:
+        return 1.0 if unit else "On"
+        
+    try:
+        return float(value_str)
+    except ValueError:
+        return value_str
+
 def fix_value_and_uom(val, uom):
     """
     Translate WEM specific values and units of measurement to Home Assistant.

@@ -3,20 +3,7 @@
 from collections import defaultdict
 from .translations import friendly_name_mapper, translate
 from .const import WemDataType
-
-
-def sanitize_value(value_str, unit=None):
-    """Sanitize typical German strings or off states to numeric values."""
-    if value_str in ["Label ist null", "Label ist null ", "--"]:
-        return 0.0
-    if value_str in ["off", "Aus", "aus"]:
-        return 0.0 if unit else "Off"
-    if value_str in ["Ein", "ein", "on", "On"]:
-        return 1.0 if unit else "On"
-    try:
-        return float(value_str)
-    except ValueError:
-        return value_str
+from .utils import sanitize_value
 
 
 def get_min_max(param_id: str, data_type: int, min_val, max_val) -> tuple[float, float]:
@@ -78,10 +65,10 @@ class WemPortalDataMapper:
                 final_value = numeric_val if numeric_val is not None else string_val
 
                 if parameter.get("EnumValues"):
-                    final_value = sanitize_value(string_val, value.get("Unit"))
+                    final_value = sanitize_value(string_val, value.get("Unit"), name)
                 else:
                     if isinstance(final_value, str):
-                        final_value = sanitize_value(final_value, value.get("Unit"))
+                        final_value = sanitize_value(final_value, value.get("Unit"), name)
 
                 is_writeable = parameter.get("IsWriteable", False)
                 data_type = parameter.get("DataType")

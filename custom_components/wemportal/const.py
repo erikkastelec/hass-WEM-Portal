@@ -44,7 +44,7 @@ API_STATISTICS_READ_URL: Final = "https://www.wemportal.com/app/Statistics/Read"
 # Scraper Constants
 MISSING_DATA_STRINGS: Final = ["--", "label ist null", "label ist null "]
 BOOLEAN_OFF_STRINGS: Final = ["off", "aus"]
-BOOLEAN_ON_STRINGS: Final = ["ein"]
+BOOLEAN_ON_STRINGS: Final = ["ein", "on"]
 TEMPERATURE_KEYWORDS: Final = ["temperatur", "temperature", "temp"]
 PERCENTAGE_KEYWORDS: Final = ["leistungsanforderung", "drehzahl", "power_requirement", "speed"]
 ENERGY_POWER_KEYWORDS: Final = ["energie", "energy", "wärmemenge", "warmemenge", "leistung", "power"]

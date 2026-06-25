@@ -61,6 +61,9 @@ class WemPortalSensor(CoordinatorEntity, RestoreSensor):
                 return "Programmed"
 
         if is_numeric_sensor:
+            if isinstance(val, str):
+                from .utils import sanitize_value
+                val = sanitize_value(val, effective_uom, self._attr_name)
             try:
                 float(val)
             except (TypeError, ValueError):
