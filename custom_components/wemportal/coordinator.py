@@ -1,9 +1,9 @@
 """ WemPortal integration coordinator """
 from __future__ import annotations
+import asyncio
 from time import monotonic
 import copy
 
-import async_timeout
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import (
@@ -55,7 +55,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                 continue
             enabled_devices.append(device_id)
 
-        async with async_timeout.timeout(DEFAULT_TIMEOUT):
+        async with asyncio.timeout(DEFAULT_TIMEOUT):
             try:
                 x = await self.hass.async_add_executor_job(self.api.fetch_data, enabled_devices)
                 self.num_failed = 0

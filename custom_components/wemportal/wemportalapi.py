@@ -371,7 +371,8 @@ class WemPortalApi:
     def get_response_details(self, response: reqs.Response):
         server_status = ""
         server_message = ""
-        if response:
+        # A requests.Response is falsy for 4xx/5xx, which are the responses we need here
+        if response is not None:
             try:
                 response_data = response.json()
                 _LOGGER.debug(response_data)
@@ -387,11 +388,11 @@ class WemPortalApi:
         self, url: str, headers=None, data=None, do_retry=True, delay=5
     ) -> reqs.Response:
         attempts = 2 if do_retry else 1
-        response = None
 
         for attempt in range(attempts):
             time.sleep(1)  # Wait 1 sec between requests to be graceful to the API.
             current_headers = headers or self.headers.copy()
+            response = None
 
             try:
                 if not data:
@@ -413,7 +414,7 @@ class WemPortalApi:
             except (reqs.exceptions.RequestException, ExpiredSessionError) as exc:
                 is_auth_error = isinstance(exc, ExpiredSessionError) or (
                     isinstance(exc, reqs.exceptions.RequestException)
-                    and response
+                    and response is not None
                     and response.status_code in (401, 403)
                 )
 
@@ -432,7 +433,7 @@ class WemPortalApi:
                 self.valid_login = False
                 
                 raise WemPortalError(
-                    f"{DATA_GATHERING_ERROR} Server returned status code: {server_status} and message: {server_message}"
+                    f"{DATA_GATHERING_ERROR} Request failed: {exc}. Server returned internal status code: {server_status} and message: {server_message}"
                 ) from exc
 
         return response
