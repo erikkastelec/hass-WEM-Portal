@@ -1,21 +1,23 @@
 """Web scraping scraper for WEM Portal using curl_cffi."""
 
-import time
 import logging
+import time
 from collections import defaultdict
+
 from curl_cffi import requests
 from lxml import html
-from custom_components.wemportal.exceptions import AuthError, ExpiredSessionError
+
 from custom_components.wemportal.const import (
-    WEB_LOGIN_URL,
-    WEB_MAIN_URL,
-    MISSING_DATA_STRINGS,
     BOOLEAN_OFF_STRINGS,
     BOOLEAN_ON_STRINGS,
-    TEMPERATURE_KEYWORDS,
-    PERCENTAGE_KEYWORDS,
     ENERGY_POWER_KEYWORDS,
+    MISSING_DATA_STRINGS,
+    PERCENTAGE_KEYWORDS,
+    TEMPERATURE_KEYWORDS,
+    WEB_LOGIN_URL,
+    WEB_MAIN_URL,
 )
+from custom_components.wemportal.exceptions import AuthError
 
 _LOGGER = logging.getLogger(__name__)
 

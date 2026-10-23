@@ -2,16 +2,16 @@
 Select platform for wemportal component
 """
 
+from typing import override
+
+from fuzzywuzzy import process
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, _LOGGER
-from . import get_wemportal_unique_id
-from fuzzywuzzy import process
+from .const import _LOGGER, DOMAIN
+from .entity import WemPortalWritableEntity
 
 
 async def async_setup_entry(
@@ -37,30 +37,17 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class WemPortalSelect(CoordinatorEntity, SelectEntity):
+class WemPortalSelect(WemPortalWritableEntity, SelectEntity):
     """Representation of a WEM Portal Sensor."""
 
     def __init__(
         self, coordinator, config_entry: ConfigEntry, device_id, _unique_id, entity_data
     ) -> None:
         """Initialize the sensor."""
-        super().__init__(coordinator)
-        self._last_updated = None
-        self._config_entry = config_entry
-        self._device_id = device_id
-        self._attr_has_entity_name = True
-        self._attr_name = entity_data.get("friendlyName", _unique_id)
-        self._attr_unique_id = get_wemportal_unique_id(
-            self._config_entry.entry_id, str(self._device_id), str(_unique_id)
-        )
-        self._parameter_id = entity_data["ParameterID"]
-        self._data_key = _unique_id
-        self._attr_icon = entity_data["icon"]
+        super().__init__(coordinator, config_entry, device_id, _unique_id, entity_data)
         self._options = entity_data["options"]
         self._options_names = entity_data["optionsNames"]
-        self._module_index = entity_data["ModuleIndex"]
-        self._module_type = entity_data["ModuleType"]
-        
+
         try:
             val = entity_data["value"]
             if val in self._options_names:
@@ -84,15 +71,11 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
             _LOGGER.warning("Value %s not found in options %s (names: %s) for select %s", entity_data["value"], self._options, self._options_names, self._attr_name)
         _LOGGER.debug('Init select: %s: "%s"', self._attr_name, self._attr_current_option)
 
+    @override
     async def async_select_option(self, option: str) -> None:
         """Call the API to change the parameter value"""
-        await self.hass.async_add_executor_job(
-            self.coordinator.api.change_value,
-            self._device_id,
-            self._parameter_id,
-            self._module_index,
-            self._module_type,
-            self._options[self._options_names.index(option)],
+        await self._async_change_value(
+            self._options[self._options_names.index(option)]
         )
 
         self._attr_current_option = option
@@ -100,36 +83,13 @@ class WemPortalSelect(CoordinatorEntity, SelectEntity):
         self.async_write_ha_state()
 
     @property
-    def device_info(self) -> DeviceInfo:
-        """Get device information."""
-        return {
-            "identifiers": {
-                (DOMAIN, f"{self._config_entry.entry_id}:{self._device_id}")
-            },
-            "via_device": (DOMAIN, self._config_entry.entry_id),
-            "name": str(self._device_id),
-            "manufacturer": "Weishaupt",
-        }
-
-    @property
-    def available(self):
-        """Return if entity is available."""
-        return self.coordinator.last_update_success
-
-    @property
+    @override
     def options(self) -> list[str]:
         """Return list of available options."""
         return self._options_names
 
-    @property
-    def extra_state_attributes(self):
-        """Return the state attributes of this device."""
-        attr = {}
-        if self._last_updated is not None:
-            attr["Last Updated"] = self._last_updated
-        return attr
-
     @callback
+    @override
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
 

@@ -1,13 +1,16 @@
 """Test the wemportal coordinator."""
-from unittest.mock import MagicMock, patch
 from datetime import timedelta
+from unittest.mock import MagicMock
 
 import pytest
-from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.update_coordinator import UpdateFailed
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.wemportal.const import DOMAIN
 from custom_components.wemportal.coordinator import WemPortalDataUpdateCoordinator
-from custom_components.wemportal.exceptions import WemPortalError, AuthError
+from custom_components.wemportal.exceptions import AuthError, WemPortalError
 
 
 async def test_coordinator_update_success(hass):
@@ -73,28 +76,28 @@ async def test_coordinator_disabled_devices(hass):
     api_mock.data = {"1234": {}, "5678": {}}
     api_mock.fetch_data.return_value = {"1234": {}}
 
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.add_to_hass(hass)
+    device_registry = dr.async_get(hass)
+    for device_id in ("1234", "5678"):
+        device_registry.async_get_or_create(
+            config_entry_id=entry.entry_id,
+            identifiers={(DOMAIN, f"{entry.entry_id}:{device_id}")},
+        )
+    disabled_device = device_registry.async_get_device_by_identifier(
+        (DOMAIN, f"{entry.entry_id}:5678"), entry.entry_id
+    )
+    device_registry.async_update_device(
+        disabled_device.id, disabled_by=dr.DeviceEntryDisabler.USER
+    )
+
     coordinator = WemPortalDataUpdateCoordinator(
         hass,
         api_mock,
-        None,
+        entry,
         timedelta(seconds=30),
     )
 
-    with patch("custom_components.wemportal.coordinator.dr.async_get") as mock_dr_get:
-        mock_registry = MagicMock()
-        
-        def mock_get_device(identifiers):
-            device_id = list(identifiers)[0][1]
-            mock_device = MagicMock()
-            if device_id == "5678":
-                mock_device.disabled_by = "user"
-            else:
-                mock_device.disabled_by = None
-            return mock_device
-            
-        mock_registry.async_get_device.side_effect = mock_get_device
-        mock_dr_get.return_value = mock_registry
+    await coordinator.async_refresh()
 
-        await coordinator.async_refresh()
-
-        api_mock.fetch_data.assert_called_once_with(["1234"])
+    api_mock.fetch_data.assert_called_once_with(["1234"])
