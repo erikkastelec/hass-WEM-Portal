@@ -95,6 +95,8 @@ class WemPortalApi:
         self.data = copy.deepcopy(existing_data) if existing_data else {}
         # Parameter definitions per device, saved to disk as fetching them takes about 6 s per module
         self.parameter_cache = copy.deepcopy(parameter_cache) if parameter_cache else {}
+        # Set when the parameter cache needs saving
+        self.parameter_cache_changed = False
         self.device_modules: dict[str, list[dict]] = {}
         self.username = username
         self.password = password
@@ -523,10 +525,10 @@ class WemPortalApi:
                     parameters[f"{module_key[0]}-{module_key[1]}"] = {}
                 elif current.get("parameters"):
                     parameters[f"{module_key[0]}-{module_key[1]}"] = current["parameters"]
-            self.parameter_cache[device_id] = {
-                "signature": _module_signature(device_modules),
-                "parameters": parameters,
-            }
+            cache = {"signature": _module_signature(device_modules), "parameters": parameters}
+            if self.parameter_cache.get(device_id) != cache:
+                self.parameter_cache[device_id] = cache
+                self.parameter_cache_changed = True
 
     def change_value(
         self,

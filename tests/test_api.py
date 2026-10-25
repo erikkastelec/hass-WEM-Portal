@@ -406,6 +406,7 @@ def test_fetch_data_uses_parameter_cache() -> None:
         (0, 2): {"Index": 0, "Type": 2, "Name": "HZK0", "parameters": PARAMETERS}
     }
     assert api.parameter_cache == CACHE
+    assert not api.parameter_cache_changed
 
 
 def test_fetch_data_refreshes_outdated_parameter_cache() -> None:
@@ -432,6 +433,7 @@ def test_fetch_data_refreshes_outdated_parameter_cache() -> None:
 
     assert mock_call.call_count == 3
     assert api.parameter_cache == CACHE
+    assert api.parameter_cache_changed
 
 
 def test_get_data_without_slow_data(api: WemPortalApi) -> None:

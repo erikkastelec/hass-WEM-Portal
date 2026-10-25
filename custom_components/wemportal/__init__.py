@@ -9,10 +9,9 @@ from datetime import timedelta
 
 import homeassistant.helpers.entity_registry as entity_registry
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
+from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as device_registry
-from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -23,10 +22,8 @@ from .const import (
     DEFAULT_CONF_SCAN_INTERVAL_VALUE,
     DOMAIN,
     PLATFORMS,
-    STORAGE_VERSION,
 )
-from .coordinator import WemPortalDataUpdateCoordinator
-from .wemportalapi import WemPortalApi
+from .coordinator import WemPortalDataUpdateCoordinator, parameter_store
 
 
 def get_wemportal_unique_id(config_entry_id: str, device_id: str, name: str):
@@ -104,7 +101,7 @@ async def migrate_unique_ids(
                 break
 
     if change:
-        await coordinator.async_config_entry_first_refresh()
+        await coordinator.async_refresh()
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -135,24 +132,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         _LOGGER.info("Found devices for %s: %s", DOMAIN, device_ids)
 
-    store = _parameter_store(hass, entry)
-    parameter_cache = await store.async_load() or {}
-
-    # Creating API object
-    api = WemPortalApi(
-        entry.data.get(CONF_USERNAME),
-        entry.data.get(CONF_PASSWORD),
-        config=entry.options,
-        parameter_cache=parameter_cache,
-    )
-    # Create custom coordinator
     coordinator = WemPortalDataUpdateCoordinator(
-        hass, api, entry, timedelta(seconds=update_interval)
+        hass, entry, timedelta(seconds=update_interval)
     )
-
     await coordinator.async_config_entry_first_refresh()
-    if coordinator.api.parameter_cache != parameter_cache:
-        await store.async_save(coordinator.api.parameter_cache)
 
     # Is there an on_update function that we can add listener to?
     _LOGGER.info("Migrating entity names for wemportal")
@@ -168,7 +151,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     hass.data[DOMAIN][entry.entry_id] = {
-        "api": api,
+        "api": coordinator.api,
         # "config": entry.data,
         "coordinator": coordinator,
         "hub_device_id": hub_device.id,
@@ -198,12 +181,7 @@ async def _async_entry_updated(hass: HomeAssistant, config_entry: ConfigEntry) -
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Remove the cached parameter definitions of a removed entry."""
-    await _parameter_store(hass, entry).async_remove()
-
-
-def _parameter_store(hass: HomeAssistant, entry: ConfigEntry) -> Store:
-    """Return the store with the parameter definitions of an entry."""
-    return Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
+    await parameter_store(hass, entry).async_remove()
 
 
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:

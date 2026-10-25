@@ -14,7 +14,7 @@ from pytest_homeassistant_custom_component.common import (
     load_json_object_fixture,
 )
 
-from custom_components import wemportal
+from custom_components.wemportal import coordinator
 from custom_components.wemportal.const import DOMAIN
 
 DEVICE_ID = "1234"
@@ -63,11 +63,12 @@ async def test_parameter_cache_stored(
     storage_key = f"{DOMAIN}.{mock_config_entry.entry_id}"
     hass_storage[storage_key] = {"version": 1, "key": storage_key, "data": {"1234": "old"}}
     mock_wemportal_api.parameter_cache = {"1234": "new"}
+    mock_wemportal_api.parameter_cache_changed = True
 
     assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    assert wemportal.WemPortalApi.call_args.kwargs["parameter_cache"] == {"1234": "old"}
+    assert coordinator.WemPortalApi.call_args.kwargs["parameter_cache"] == {"1234": "old"}
     assert hass_storage[storage_key]["data"] == {"1234": "new"}
 
     await hass.config_entries.async_remove(mock_config_entry.entry_id)
