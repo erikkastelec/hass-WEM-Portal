@@ -432,3 +432,23 @@ def test_fetch_data_refreshes_outdated_parameter_cache() -> None:
 
     assert mock_call.call_count == 3
     assert api.parameter_cache == CACHE
+
+
+def test_get_data_without_slow_data(api: WemPortalApi) -> None:
+    """Test schedules and statistics can be left out."""
+    api.data = {"1234": {}}
+    api.modules = {"1234": {}}
+
+    with (
+        patch.object(
+            api, "make_api_call", return_value=_json({"ConnectionStatus": 0, "Modules": []})
+        ),
+        patch.object(api, "get_circuit_times") as mock_circuit_times,
+        patch.object(api, "get_statistics") as mock_statistics,
+    ):
+        api.get_data(include_slow=False)
+
+    mock_circuit_times.assert_not_called()
+    mock_statistics.assert_not_called()
+    # Not fetching them now must not postpone the next fetch
+    assert api.last_circuit_times_fetch == 0.0

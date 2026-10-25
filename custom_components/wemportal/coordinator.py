@@ -1,6 +1,7 @@
 """ WemPortal integration coordinator """
 from __future__ import annotations
 import asyncio
+from datetime import timedelta
 
 from time import monotonic
 from typing import override
@@ -40,8 +41,10 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
             hass,
             _LOGGER,
             name="WemPortal update",
-            update_interval=update_interval,
+            # The first refresh leaves out schedules and statistics, so the next one follows right away
+            update_interval=timedelta(seconds=1),
         )
+        self.regular_update_interval = update_interval
         self.api = api
         self.hass = hass
         self.config_entry = config_entry
@@ -69,7 +72,13 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
 
         async with asyncio.timeout(DEFAULT_TIMEOUT):
             try:
-                x = await self.hass.async_add_executor_job(self.api.fetch_data, enabled_devices)
+                # Schedules and statistics take over a minute, so leave them out of the setup
+                include_slow = self.data is not None
+                if include_slow:
+                    self.update_interval = self.regular_update_interval
+                x = await self.hass.async_add_executor_job(
+                    self.api.fetch_data, enabled_devices, include_slow
+                )
                 self.num_failed = 0
                 return x
             except AuthError as exc:

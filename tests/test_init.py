@@ -1,12 +1,18 @@
 """Test the wemportal setup."""
+from datetime import timedelta
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from homeassistant.util import dt as dt_util
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+    load_json_object_fixture,
+)
 
 from custom_components import wemportal
 from custom_components.wemportal.const import DOMAIN
@@ -68,3 +74,44 @@ async def test_parameter_cache_stored(
     await hass.async_block_till_done()
 
     assert storage_key not in hass_storage
+
+
+async def test_sensors_added_after_setup(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_wemportal_api: MagicMock,
+) -> None:
+    """Test sensors from schedules and statistics are added when they show up."""
+    data = load_json_object_fixture("api_data.json")
+    schedule = {
+        "friendlyName": "Heating Program 1",
+        "ParameterID": "Heizprogramm1",
+        "unit": None,
+        "value": "Active",
+        "icon": "mdi:calendar-clock",
+        "platform": "sensor",
+    }
+    mock_wemportal_api.fetch_data.side_effect = [
+        data,
+        {DEVICE_ID: {**data[DEVICE_ID], "HZK0-Heizprogramm1": schedule}},
+    ]
+    mock_config_entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert mock_wemportal_api.fetch_data.call_args_list == [call([], False)]
+
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=2))
+    await hass.async_block_till_done()
+
+    assert mock_wemportal_api.fetch_data.call_args_list == [
+        call([], False),
+        call([], True),
+    ]
+    entity_id = er.async_get(hass).async_get_entity_id(
+        "sensor",
+        DOMAIN,
+        f"{mock_config_entry.entry_id}:{DEVICE_ID}:HZK0-Heizprogramm1",
+    )
+    assert entity_id is not None
+    assert hass.states.get(entity_id).state == "Active"

@@ -124,7 +124,8 @@ class WemPortalApi:
         self.failing_requests: set[str] = set()
         self.api_version = None
 
-    def fetch_data(self, enabled_devices=None):
+    def fetch_data(self, enabled_devices=None, include_slow=True):
+        """Fetch the data, where include_slow also fetches schedules and statistics."""
         try:
             if self.mode != "web":
                 # Login and get device info
@@ -147,7 +148,7 @@ class WemPortalApi:
             if self.mode == "web":
                 self._merge_webscraping_data(next(iter(self.data), "0000"), self.fetch_webscraping_data())
             elif self.mode == "api":
-                self.get_data(enabled_devices)
+                self.get_data(enabled_devices, include_slow)
             else:
                 # Scrape once per scan interval, with 10 s of slack for the poll timing
                 if (
@@ -162,7 +163,7 @@ class WemPortalApi:
                         _LOGGER.warning("Web scraper failed this cycle. Falling back to API only. Error: %s", exc)
 
                 # The API always runs as a resilient fallback
-                self.get_data(enabled_devices)
+                self.get_data(enabled_devices, include_slow)
 
             return self.data
 
@@ -566,12 +567,14 @@ class WemPortalApi:
             ) from exc
 
     # Refresh data and retrieve new data
-    def get_data(self, enabled_devices=None):
+    def get_data(self, enabled_devices=None, include_slow=True):
         _LOGGER.debug("Fetching fresh api data. enabled_devices=%s, self.data.keys()=%s", enabled_devices, list(self.data.keys()))
         target_devices = enabled_devices if enabled_devices else list(self.data.keys())
         _LOGGER.debug("Computed target_devices=%s", target_devices)
         now = time.time()
-        fetch_circuit_times = now - self.last_circuit_times_fetch >= SLOW_UPDATE_INTERVAL
+        fetch_circuit_times = (
+            include_slow and now - self.last_circuit_times_fetch >= SLOW_UPDATE_INTERVAL
+        )
         if fetch_circuit_times:
             self.last_circuit_times_fetch = now
         for device_id in target_devices:
@@ -663,7 +666,8 @@ class WemPortalApi:
                 self.get_circuit_times(device_id)
 
         # 4. Fetch Energy Statistics (Rate limited)
-        self.get_statistics(enabled_devices)
+        if include_slow:
+            self.get_statistics(enabled_devices)
 
     def get_circuit_times(self, device_id):
         """Fetch the heating schedules (DataType == 6) of a device."""
