@@ -24,6 +24,8 @@ DEFAULT_MODE: Final = "api"
 AVAILABLE_MODES: Final = ["api", "web", "both"]
 PLATFORMS = ["number", "select", "sensor", "switch"]
 REFRESH_WAIT_TIME: Final = 360
+# Schedules and statistics rarely change, so they are fetched less often than values
+SLOW_UPDATE_INTERVAL: Final = 3600
 DATA_GATHERING_ERROR: Final = "An error occurred while gathering data.This issue should resolve by itself. If this problem persists,open an issue at https://github.com/erikkastelec/hass-WEM-Portal/issues"
 DEFAULT_CONF_SCAN_INTERVAL_API_VALUE: Final = 300
 DEFAULT_CONF_SCAN_INTERVAL_VALUE: Final = 1800
