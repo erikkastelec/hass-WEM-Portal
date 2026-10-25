@@ -6,6 +6,7 @@ import pytest
 import requests
 
 from custom_components.wemportal.const import SLOW_UPDATE_INTERVAL
+from custom_components.wemportal.scraper import WemPortalScraper
 from custom_components.wemportal.wemportalapi import WemPortalApi
 from custom_components.wemportal.exceptions import ForbiddenError, WemPortalError
 
@@ -279,3 +280,90 @@ def test_get_statistics_unavailable_group(
     assert [record.getMessage() for record in caplog.records] == [
         "Failed to fetch Statistics for group 1 (device 1234): invalid"
     ]
+
+
+def test_get_circuit_times(api: WemPortalApi) -> None:
+    """Test a schedule is read with the job of its refresh request."""
+    api.data = {"1234": {}}
+    api.modules = {
+        "1234": {
+            (1, 2): {
+                "Index": 1,
+                "Type": 2,
+                "Name": "HK1",
+                "parameters": {
+                    "Heizprogramm1": {"DataType": 6},
+                    "Komfort": {"DataType": 3},
+                },
+            }
+        }
+    }
+    refresh = MagicMock()
+    refresh.json.return_value = {"JobID": 42}
+    schedule = MagicMock()
+    schedule.json.return_value = {"CircuitTimesDay": ["Mo"], "PossibleValues": [1]}
+
+    with patch.object(
+        api, "make_api_call", side_effect=[refresh, schedule]
+    ) as mock_call:
+        api.get_circuit_times("1234")
+
+    payload = {"DeviceID": 1234, "ModuleIndex": 1, "ModuleType": 2, "ParameterID": "Heizprogramm1"}
+    assert mock_call.call_args_list[0].kwargs["data"] == payload
+    assert mock_call.call_args_list[1].kwargs["data"] == {**payload, "JobID": 42}
+    sensor = api.data["1234"]["HK1-Heizprogramm1"]
+    assert sensor["value"] == "Active"
+    assert sensor["CircuitTimesDay"] == ["Mo"]
+    assert sensor["PossibleValues"] == [1]
+    assert sensor["DataType"] == 6
+    assert sensor["platform"] == "sensor"
+
+
+def test_get_statistics(api: WemPortalApi) -> None:
+    """Test a statistics group becomes an energy sensor."""
+    api.data = {"1234": {}}
+    api.statistics_modules = {"1234": 1}
+    refresh = MagicMock()
+    refresh.json.return_value = {
+        "GroupTypeDescriptions": [{"GroupType": 1, "Description": " "}]
+    }
+    stats = MagicMock()
+    stats.json.return_value = {"Values": [{"Value": 1.0}, {"Value": 2.5}], "Unit": "kWh"}
+
+    with patch.object(api, "make_api_call", side_effect=[refresh, stats]):
+        api.get_statistics()
+
+    assert api.data["1234"]["1234-Energy_1"] == {
+        "friendlyName": "Heating Energy Yield",
+        "ParameterID": "Energy_1",
+        "unit": "kWh",
+        "value": 2.5,
+        "IsWriteable": False,
+        "DataType": -1,
+        "ModuleIndex": -1,
+        "ModuleType": -1,
+        "platform": "sensor",
+        "icon": "mdi:lightning-bolt",
+        "device_class": "energy",
+        "state_class": "total_increasing",
+    }
+
+
+def test_fetch_data_web_mode() -> None:
+    """Test web mode stores the scraped values without the scraper's cookie."""
+    api = WemPortalApi("test", "test", config={"mode": "web"})
+    scraped = {
+        "friendlyName": "System - Außentemperatur",
+        "value": 12.5,
+        "unit": "°C",
+        "platform": "sensor",
+    }
+
+    with patch.object(
+        WemPortalScraper, "scrape", return_value=[{"system-temp": scraped, "cookie": {}}]
+    ):
+        data = api.fetch_data()
+
+    assert list(data) == ["0000"]
+    assert list(data["0000"]) == ["system-temp"]
+    assert data["0000"]["system-temp"]["value"] == 12.5
