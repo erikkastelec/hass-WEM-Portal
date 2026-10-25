@@ -8,8 +8,10 @@ from lxml import html
 from custom_components.wemportal.const import (
     BOOLEAN_OFF_STRINGS,
     BOOLEAN_ON_STRINGS,
+    ENERGY_KEYWORDS,
     MISSING_DATA_STRINGS,
     PERCENTAGE_KEYWORDS,
+    POWER_KEYWORDS,
     TEMPERATURE_KEYWORDS,
     WEB_LOGIN_URL,
     WEB_MAIN_URL,
@@ -44,6 +46,10 @@ def _parse_value(raw_value: str, name: str) -> tuple[float | str | None, str | N
             unit = "°C"
         elif any(x in name for x in PERCENTAGE_KEYWORDS):
             unit = "%"
+        elif any(x in name for x in POWER_KEYWORDS):
+            unit = "kW"
+        elif any(x in name for x in ENERGY_KEYWORDS):
+            unit = "kWh"
     return value, unit
 
 

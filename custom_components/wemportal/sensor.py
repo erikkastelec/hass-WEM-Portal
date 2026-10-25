@@ -12,7 +12,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import _LOGGER, DOMAIN
 from .entity import WemPortalEntity
-from .utils import fix_value_and_uom, uom_to_device_class, uom_to_state_class
+from .utils import (
+    fix_value_and_uom,
+    sanitize_value,
+    uom_to_device_class,
+    uom_to_state_class,
+)
 
 
 async def async_setup_entry(
@@ -61,7 +66,6 @@ class WemPortalSensor(WemPortalEntity, RestoreSensor):
 
         if is_numeric_sensor:
             if isinstance(val, str):
-                from .utils import sanitize_value
                 val = sanitize_value(val, effective_uom, self._attr_name)
             try:
                 float(val)
@@ -103,6 +107,10 @@ class WemPortalSensor(WemPortalEntity, RestoreSensor):
                     "Restored unit %s for %s from previous session", 
                     self._attr_native_unit_of_measurement, self._attr_name
                 )
+                if self._attr_native_value is not None:
+                    self._attr_native_value = self._validated_native_value(
+                        self._attr_native_value, self._attr_native_unit_of_measurement
+                    )
     @callback
     @override
     def _handle_coordinator_update(self) -> None:

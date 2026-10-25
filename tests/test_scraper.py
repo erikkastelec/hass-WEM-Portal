@@ -2,7 +2,7 @@
 import pytest
 from pytest_homeassistant_custom_component.common import load_fixture
 
-from custom_components.wemportal.scraper import WemPortalScraper
+from custom_components.wemportal.scraper import WemPortalScraper, _parse_value
 
 
 @pytest.fixture(scope="module")
@@ -44,3 +44,18 @@ def test_parse_expert_page(
 ) -> None:
     """Test values and units are parsed from the expert page."""
     assert parsed_values[friendly_name] == (value, unit)
+
+
+@pytest.mark.parametrize(
+    ("raw_val", "name", "expected_val", "expected_unit"),
+    [
+        ("Aus", "system-warmepumpe_ist_leistung", 0.0, "kW"),
+        ("Stop", "system-drehzahl_pumpe_m1", 0.0, "%"),
+        ("--", "system-gesamtenergie", None, "kWh"),
+        ("11,1 kW", "system-warmepumpe_ist_leistung", 11.1, "kW"),
+        ("100 %", "system-drehzahl_pumpe_m1", 100.0, "%"),
+    ],
+)
+def test_parse_value_keywords(raw_val, name, expected_val, expected_unit):
+    """Test that keywords correctly infer units even when devices are off or missing values."""
+    assert _parse_value(raw_val, name) == (expected_val, expected_unit)

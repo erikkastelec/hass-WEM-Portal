@@ -9,9 +9,18 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import _LOGGER, DOMAIN
+from .const import _LOGGER, BOOLEAN_ON_STRINGS, DOMAIN
 from .entity import WemPortalWritableEntity
 from .utils import fix_value_and_uom
+
+
+def _is_on(value) -> bool:
+    """Return True if value represents an active/on state."""
+    if value in (1, 1.0, True):
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in BOOLEAN_ON_STRINGS
+    return False
 
 
 async def async_setup_entry(
@@ -33,7 +42,6 @@ async def async_setup_entry(
                         coordinator, config_entry, device_id, unique_id, values
                     )
                 )
-
     async_add_entities(entities)
 
 
@@ -54,7 +62,7 @@ class WemPortalSwitch(WemPortalWritableEntity, SwitchEntity):
         val, uom = fix_value_and_uom(entity_data["value"], entity_data["unit"])
 
         self._attr_unit = uom
-        self._attr_is_on = (val in [1, 1.0, "On", "on", "Ein", "ein"])
+        self._attr_is_on = _is_on(val)
         self._attr_device_class = "switch"  # type: ignore
 
         _LOGGER.debug('Init switch: %s: "%s" [%s]', self._attr_name, self._attr_is_on, self._attr_unit)
@@ -77,7 +85,7 @@ class WemPortalSwitch(WemPortalWritableEntity, SwitchEntity):
         """Handle updated data from the coordinator."""
         try:
             temp_val = self.coordinator.data[self._device_id][self._data_key]["value"]
-            self._attr_is_on = (temp_val in [1, 1.0, "On", "on", "Ein", "ein"])
+            self._attr_is_on = _is_on(temp_val)
             
             _LOGGER.debug('Update switch: %s: "%s" [%s]', self._attr_name, self._attr_is_on, self._attr_unit)
 
