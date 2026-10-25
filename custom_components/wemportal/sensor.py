@@ -47,8 +47,8 @@ class WemPortalSensor(WemPortalEntity, SensorEntity):
             effective_uom = getattr(self, "_attr_native_unit_of_measurement", None)
         is_numeric_sensor = effective_uom not in (None, "")
 
+        # None means the WEM Portal has no value right now, which isn't an error
         if val is None:
-            _LOGGER.warning('Invalid sensor value for "%s": %r -> set to None', self._attr_name, val)
             return None
 
         if isinstance(val, str):

@@ -21,6 +21,35 @@ from custom_components.wemportal.exceptions import AuthError
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def _parse_value(raw_value: str, name: str) -> tuple[float | str | None, str | None]:
+    """Split a value cell like "12,5 °C" into its value and unit."""
+    number, _, unit = raw_value.partition(" ")
+    lowered = raw_value.lower()
+    if lowered in BOOLEAN_OFF_STRINGS:
+        value, unit = 0.0, None
+    elif lowered in BOOLEAN_ON_STRINGS:
+        value, unit = 1.0, None
+    elif lowered in MISSING_DATA_STRINGS:
+        value, unit = None, None
+    elif not number.strip("-"):
+        # A placeholder like "--- °C" means the value is unavailable (e.g. sensor not connected)
+        value = None
+    else:
+        try:
+            value = float(number.replace(",", "."))
+        except ValueError:
+            # Text like "Nein" has no unit
+            return raw_value, None
+
+    if not unit:
+        if any(x in name for x in TEMPERATURE_KEYWORDS):
+            unit = "°C"
+        elif any(x in name for x in PERCENTAGE_KEYWORDS):
+            unit = "%"
+    return value, unit
+
+
 class WemPortalScraper:
     """Scraper for navigating and extracting data from WEM Portal using curl_cffi."""
 
@@ -104,86 +133,38 @@ class WemPortalScraper:
         
         for div in tree.xpath('//div[contains(@class, "RadPanelBar RadPanelBar_Default rpbSimpleData")]'):
             header_elems = div.xpath('.//th[contains(@class, "simpleDataHeaderTextCell")]/span/text()')
-            if header_elems:
-                header_raw = header_elems[0].strip()
-                header = (
-                    header_elems[0].replace("/#", "")
-                    .replace("  ", "")
-                    .replace(" - ", "_")
-                    .replace("/*+/*", "_")
-                    .replace(" ", "_")
-                    .casefold()
-                )
-            else:
-                header_raw = "Unknown"
-                header = "unknown"
+            if not header_elems:
                 continue
-                
+            # "/*+/*" separates the levels of nested headers
+            header_raw = " ".join(
+                header_elems[0].replace("/#", "").replace("/*+/*", "-").split()
+            )
+            header = (
+                header_elems[0].replace("/#", "")
+                .replace("  ", "")
+                .replace(" - ", "_")
+                .replace("/*+/*", "_")
+                .replace(" ", "_")
+                .casefold()
+            )
+
             for td in div.xpath('.//div[contains(@class, "rpTemplate")]/table[contains(@class, "simpleDataTable")]/tbody/tr'):
-                try:
-                    name_elems = td.xpath('.//td[contains(@class, "simpleDataNameCell")]/span/text()')
-                    val_elems = td.xpath('.//td[contains(@class, "simpleDataValueCell") or contains(@class, "simpleDataValueEnumCell")]/span/text()')
-                    
-                    if name_elems and val_elems:
-                        raw_name = name_elems[0].strip()
-                        friendly_name = f"{header_raw} - {raw_name.lstrip('- ')}"
-                        
-                        name = name_elems[0].replace("  ", "").replace(" ", "_").casefold()
-                        name = header + "-" + name
-                        original_value = val_elems[0].strip()
-                        value = original_value
-                        
-                        split_value = value.split(" ", 1)
-                        unit = ""
-                        if len(split_value) >= 2:
-                            value = split_value[0]
-                            unit = split_value[1]
-                        else:
-                            value = split_value[0]
-                            
-                        try:
-                            value = ".".join(value.split(","))
-                            value = float(value)
-                        except ValueError:
-                            # If it's not a number, revert to the full string
-                            value = original_value
-                            unit = None
-
-                        if not unit:
-                            name_lower = name.lower()
-                            if any(x in name_lower for x in TEMPERATURE_KEYWORDS):
-                                unit = '°C'
-                            elif any(x in name_lower for x in PERCENTAGE_KEYWORDS):
-                                unit = '%'
-
-                        # Handle missing or boolean values
-                        value_lower = str(value).lower() if isinstance(value, str) else value
-                        if value_lower in MISSING_DATA_STRINGS:
-                            # Energy/Power sensors MUST be None to avoid Energy Dashboard spikes.
-                            name_lower = name.lower()
-                            if any(x in name_lower for x in ENERGY_POWER_KEYWORDS):
-                                value = None
-                            else:
-                                value = 0.0
-                        elif value_lower in BOOLEAN_OFF_STRINGS:
-                            value = 0.0
-                        elif value_lower in BOOLEAN_ON_STRINGS:
-                            value = 1.0
-
-                        icon_mapper = defaultdict(lambda: "mdi:flash")
-                        icon_mapper["°C"] = "mdi:thermometer"
-
-                        output[name] = {
-                            "value": value,
-                            "name": name,
-                            "icon": icon_mapper[unit],
-                            "unit": unit,
-                            "platform": "sensor",
-                            "friendlyName": friendly_name,
-                            "ParameterID": name,
-                        }
-                except (IndexError, ValueError):
+                name_elems = td.xpath('.//td[contains(@class, "simpleDataNameCell")]/span/text()')
+                val_elems = td.xpath('.//td[contains(@class, "simpleDataValueCell") or contains(@class, "simpleDataValueEnumCell")]/span/text()')
+                if not name_elems or not val_elems:
                     continue
+
+                name = f'{header}-{name_elems[0].replace("  ", "").replace(" ", "_").casefold()}'
+                value, unit = _parse_value(val_elems[0].strip(), name)
+                output[name] = {
+                    "value": value,
+                    "name": name,
+                    "icon": "mdi:thermometer" if unit == "°C" else "mdi:flash",
+                    "unit": unit,
+                    "platform": "sensor",
+                    "friendlyName": f"{header_raw} - {name_elems[0].strip().lstrip('- ')}",
+                    "ParameterID": name,
+                }
 
         # Save cookies for next run (extracted from requests Session)
         cookies_dict = dict(self.session.cookies)
