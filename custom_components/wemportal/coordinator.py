@@ -84,7 +84,8 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                         self.config_entry.data.get(CONF_USERNAME),
                         self.config_entry.data.get(CONF_PASSWORD),
                         config=self.config_entry.options,
-                        existing_data=self.api.data
+                        existing_data=self.api.data,
+                        parameter_cache=self.api.parameter_cache,
                     )
                 raise UpdateFailed(f"Error fetching data from wemportal: {exc}") from exc
             finally:

@@ -12,6 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as device_registry
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -22,6 +23,7 @@ from .const import (
     DEFAULT_CONF_SCAN_INTERVAL_VALUE,
     DOMAIN,
     PLATFORMS,
+    STORAGE_VERSION,
 )
 from .coordinator import WemPortalDataUpdateCoordinator
 from .wemportalapi import WemPortalApi
@@ -133,11 +135,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         _LOGGER.info("Found devices for %s: %s", DOMAIN, device_ids)
 
+    store = _parameter_store(hass, entry)
+    parameter_cache = await store.async_load() or {}
+
     # Creating API object
     api = WemPortalApi(
         entry.data.get(CONF_USERNAME),
         entry.data.get(CONF_PASSWORD),
-        config=entry.options
+        config=entry.options,
+        parameter_cache=parameter_cache,
     )
     # Create custom coordinator
     coordinator = WemPortalDataUpdateCoordinator(
@@ -145,6 +151,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     await coordinator.async_config_entry_first_refresh()
+    if coordinator.api.parameter_cache != parameter_cache:
+        await store.async_save(coordinator.api.parameter_cache)
 
     # Is there an on_update function that we can add listener to?
     _LOGGER.info("Migrating entity names for wemportal")
@@ -186,6 +194,16 @@ async def _async_entry_updated(hass: HomeAssistant, config_entry: ConfigEntry) -
         hass, config_entry, hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     )
     await hass.config_entries.async_reload(config_entry.entry_id)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove the cached parameter definitions of a removed entry."""
+    await _parameter_store(hass, entry).async_remove()
+
+
+def _parameter_store(hass: HomeAssistant, entry: ConfigEntry) -> Store:
+    """Return the store with the parameter definitions of an entry."""
+    return Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
 
 
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:

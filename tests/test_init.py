@@ -1,10 +1,14 @@
 """Test the wemportal setup."""
+from typing import Any
+from unittest.mock import MagicMock
+
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components import wemportal
 from custom_components.wemportal.const import DOMAIN
 
 DEVICE_ID = "1234"
@@ -40,3 +44,27 @@ async def test_child_device_via_hub(
         "switch",
     }
     assert all(entity.device_id == device.id for entity in entities)
+
+
+async def test_parameter_cache_stored(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    mock_config_entry: MockConfigEntry,
+    mock_wemportal_api: MagicMock,
+) -> None:
+    """Test the parameter definitions are loaded, saved and removed with the entry."""
+    mock_config_entry.add_to_hass(hass)
+    storage_key = f"{DOMAIN}.{mock_config_entry.entry_id}"
+    hass_storage[storage_key] = {"version": 1, "key": storage_key, "data": {"1234": "old"}}
+    mock_wemportal_api.parameter_cache = {"1234": "new"}
+
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert wemportal.WemPortalApi.call_args.kwargs["parameter_cache"] == {"1234": "old"}
+    assert hass_storage[storage_key]["data"] == {"1234": "new"}
+
+    await hass.config_entries.async_remove(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert storage_key not in hass_storage

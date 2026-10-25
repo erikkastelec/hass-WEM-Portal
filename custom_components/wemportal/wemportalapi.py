@@ -76,13 +76,26 @@ def _virtual_sensor(friendly_name, parameter_id, value, icon, unit=None, **extra
     }
 
 
+def _module_signature(device_modules):
+    """Return what identifies the modules of a device, including their firmware."""
+    return sorted(
+        f"{module['Index']}-{module['Type']}-{module.get('FWUVersion', '')}"
+        for module in device_modules
+    )
+
+
 class WemPortalApi:
     """Wrapper class for Weishaupt WEM Portal"""
 
-    def __init__(self, username, password, config=None, existing_data=None) -> None:
+    def __init__(
+        self, username, password, config=None, existing_data=None, parameter_cache=None
+    ) -> None:
         if config is None:
             config = {}
         self.data = copy.deepcopy(existing_data) if existing_data else {}
+        # Parameter definitions per device, saved to disk as fetching them takes about 6 s per module
+        self.parameter_cache = copy.deepcopy(parameter_cache) if parameter_cache else {}
+        self.device_modules: dict[str, list[dict]] = {}
         self.username = username
         self.password = password
         self.mode = config.get(CONF_MODE, DEFAULT_CONF_MODE_VALUE)
@@ -120,7 +133,9 @@ class WemPortalApi:
                 # Fetch device and parameter data only at start, or recover missing metadata
                 if self.modules is None:
                     self.get_devices()
+                    self._restore_parameters()
                     self.get_parameters()
+                    self._update_parameter_cache()
                 elif any(
                     "parameters" not in module
                     for modules in self.modules.values()
@@ -391,6 +406,7 @@ class WemPortalApi:
                     "Name": module["Name"],
                 }
             self.data[device_id_str]["ConnectionStatus"] = device["ConnectionStatus"]
+            self.device_modules[device_id_str] = device["Modules"]
             self.statistics_module_candidates[device_id_str] = [
                 module["Index"]
                 for module in device["Modules"]
@@ -474,6 +490,42 @@ class WemPortalApi:
                     continue
             for key in delete_candidates:
                 del self.modules[device_id][key]
+
+    def _restore_parameters(self):
+        """Use the cached parameter definitions of devices whose modules didn't change."""
+        for device_id, device_modules in self.device_modules.items():
+            cached = self.parameter_cache.get(device_id)
+            if cached is None or cached["signature"] != _module_signature(device_modules):
+                continue
+            _LOGGER.debug("Using cached parameter definitions for device %s", device_id)
+            for key, parameters in cached["parameters"].items():
+                module_key = tuple(int(part) for part in key.split("-"))
+                if module_key not in self.modules[device_id]:
+                    continue
+                if parameters:
+                    self.modules[device_id][module_key]["parameters"] = parameters
+                else:
+                    # Modules without parameters are removed, as when they are fetched
+                    del self.modules[device_id][module_key]
+
+    def _update_parameter_cache(self):
+        """Remember the parameter definitions of every module that was resolved."""
+        for device_id, device_modules in self.device_modules.items():
+            # Parameters aren't fetched for offline devices, so keep what was cached
+            if self.data[device_id]["ConnectionStatus"] != 0:
+                continue
+            parameters = {}
+            for module in device_modules:
+                module_key = (module["Index"], module["Type"])
+                current = self.modules[device_id].get(module_key)
+                if current is None:
+                    parameters[f"{module_key[0]}-{module_key[1]}"] = {}
+                elif current.get("parameters"):
+                    parameters[f"{module_key[0]}-{module_key[1]}"] = current["parameters"]
+            self.parameter_cache[device_id] = {
+                "signature": _module_signature(device_modules),
+                "parameters": parameters,
+            }
 
     def change_value(
         self,

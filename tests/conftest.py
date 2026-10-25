@@ -48,5 +48,6 @@ def mock_wemportal_api() -> Generator[MagicMock]:
         api = mock_api_class.return_value
         api.data = {}
         api.api_version = "1.2.3"
+        api.parameter_cache = {}
         api.fetch_data.return_value = load_json_object_fixture("api_data.json")
         yield api
