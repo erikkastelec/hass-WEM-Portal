@@ -42,6 +42,7 @@ from .const import (
     DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
     DEFAULT_CONF_SCAN_INTERVAL_VALUE,
     SLOW_UPDATE_INTERVAL,
+    STATISTICS_MODULE_TYPE,
 )
 
 
@@ -86,6 +87,11 @@ class WemPortalApi:
         }
         self.scraping_mapper = {}
         self.last_statistics_fetch = 0.0
+        # Indexes of the device modules (Type 9) per device, and the one that has the statistics
+        self.statistics_module_candidates: dict[str, list[int]] = {}
+        self.statistics_modules: dict[str, int] = {}
+        # Statistics groups per device that returned data, as not every listed group is available
+        self.statistics_groups: dict[str, set[int]] = {}
         self.last_circuit_times_fetch = 0.0
         # Requests that failed last time, so repeated failures are only logged once
         self.failing_requests: set[str] = set()
@@ -464,6 +470,11 @@ class WemPortalApi:
                     "Name": module["Name"],
                 }
             self.data[device_id_str]["ConnectionStatus"] = device["ConnectionStatus"]
+            self.statistics_module_candidates[device_id_str] = [
+                module["Index"]
+                for module in device["Modules"]
+                if module["Type"] == STATISTICS_MODULE_TYPE
+            ]
 
     def get_parameters(self):
         assert self.modules is not None
@@ -806,10 +817,19 @@ class WemPortalApi:
                     data={"DeviceID": int(device_id)},
                     do_retry=True
                 ).json()
-                
+                _LOGGER.debug("Statistics refresh response for device %s: %s", device_id, refresh_resp)
+
                 group_types = refresh_resp.get("GroupTypeDescriptions", [])
-                headers = {"X-Api-Version": "2.0.0.0"}
-                
+                if not group_types:
+                    continue
+                module_index = self._find_statistics_module(device_id, group_types[0].get("GroupType"))
+                if module_index is None:
+                    self._log_request_failure(
+                        f"Statistics (device {device_id})",
+                        WemPortalError("No device module returned statistics"),
+                    )
+                    continue
+
                 for group in group_types:
                     group_id = group.get("GroupType")
                     group_name = group.get("Description")
@@ -833,30 +853,18 @@ class WemPortalApi:
                         else:
                             group_name = translated_group
                     
-                    read_payload = {
-                        "DeviceID": int(device_id),
-                        "ModuleType": 7,
-                        "ModuleIndex": 0,
-                        "GroupType": group_id,
-                        "Type": 1
-                    }
                     request = f"Statistics for group {group_id} (device {device_id})"
 
                     try:
-                        time.sleep(2)  # Avoid hammering the API
-                        stats_resp = self.make_api_call(
-                            API_STATISTICS_READ_URL,
-                            headers=headers,
-                            data=read_payload,
-                            do_retry=True
-                        ).json()
+                        stats_resp = self._read_statistics(device_id, module_index, group_id)
                         
                         self._log_request_success(request)
+                        self.statistics_groups.setdefault(device_id, set()).add(group_id)
                         values = stats_resp.get("Values", [])
                         if not values:
                             continue
-                            
-                        # The last value in the array is the current day's consumption
+
+                        # The last entry is this year's running total
                         latest_stat = values[-1]
                         current_value = latest_stat.get("Value", 0.0)
                         unit = stats_resp.get("Unit", "kWh")
@@ -879,10 +887,44 @@ class WemPortalApi:
                         }
                         
                     except Exception as exc:
-                        self._log_request_failure(request, exc)
+                        if group_id in self.statistics_groups.get(device_id, set()):
+                            self._log_request_failure(request, exc)
+                        else:
+                            _LOGGER.debug("Failed to fetch %s: %s", request, exc)
 
             except Exception as exc:
                 self._log_request_failure(f"Statistics (device {device_id})", exc)
+
+    def _read_statistics(self, device_id, module_index, group_id):
+        """Read the yearly statistics of a group from a device module."""
+        time.sleep(2)  # Avoid hammering the API
+        return self.make_api_call(
+            API_STATISTICS_READ_URL,
+            headers={"X-Api-Version": "2.0.0.0"},
+            data={
+                "DeviceID": int(device_id),
+                "ModuleType": STATISTICS_MODULE_TYPE,
+                "ModuleIndex": module_index,
+                "GroupType": group_id,
+                # Yearly range: day and month lists end in placeholders for periods that aren't over
+                "Type": 3,
+            },
+            do_retry=True,
+        ).json()
+
+    def _find_statistics_module(self, device_id, group_id):
+        """Return the index of the device module that has the statistics, if any."""
+        # Which device module has them differs per installation, so try each once
+        if device_id not in self.statistics_modules:
+            for module_index in self.statistics_module_candidates.get(device_id, []):
+                try:
+                    self._read_statistics(device_id, module_index, group_id)
+                except WemPortalError as exc:
+                    _LOGGER.debug("Device module %s has no statistics: %s", module_index, exc)
+                    continue
+                self.statistics_modules[device_id] = module_index
+                break
+        return self.statistics_modules.get(device_id)
 
     def _log_request_failure(self, request: str, exc: Exception) -> None:
         """Log a failed request as a warning once, then as debug while it keeps failing."""
