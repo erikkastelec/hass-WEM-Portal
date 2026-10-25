@@ -6,22 +6,22 @@ from typing import override
 
 from fuzzywuzzy import process
 from homeassistant.components.select import SelectEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import _LOGGER, DOMAIN
+from .const import _LOGGER
+from .coordinator import WemPortalConfigEntry
 from .entity import WemPortalWritableEntity
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: WemPortalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Select entry setup."""
 
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
+    coordinator = config_entry.runtime_data.coordinator
     entities: list[WemPortalSelect] = []
     for device_id, entity_data in coordinator.data.items():
         for unique_id, values in entity_data.items():
@@ -41,7 +41,7 @@ class WemPortalSelect(WemPortalWritableEntity, SelectEntity):
     """Representation of a WEM Portal Sensor."""
 
     def __init__(
-        self, coordinator, config_entry: ConfigEntry, device_id, _unique_id, entity_data
+        self, coordinator, config_entry: WemPortalConfigEntry, device_id, _unique_id, entity_data
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator, config_entry, device_id, _unique_id, entity_data)

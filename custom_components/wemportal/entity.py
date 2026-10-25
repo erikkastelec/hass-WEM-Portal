@@ -1,12 +1,11 @@
 """Base entities for the wemportal component."""
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import get_wemportal_unique_id
 from .const import DOMAIN
-from .coordinator import WemPortalDataUpdateCoordinator
+from .coordinator import WemPortalConfigEntry, WemPortalDataUpdateCoordinator
 
 
 class WemPortalEntity(CoordinatorEntity[WemPortalDataUpdateCoordinator]):
@@ -17,7 +16,7 @@ class WemPortalEntity(CoordinatorEntity[WemPortalDataUpdateCoordinator]):
     def __init__(
         self,
         coordinator: WemPortalDataUpdateCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: WemPortalConfigEntry,
         device_id,
         data_key,
         entity_data,
@@ -35,9 +34,7 @@ class WemPortalEntity(CoordinatorEntity[WemPortalDataUpdateCoordinator]):
         self._attr_icon = entity_data["icon"]
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, f"{config_entry.entry_id}:{device_id}")},
-            via_device_id=coordinator.hass.data[DOMAIN][config_entry.entry_id][
-                "hub_device_id"
-            ],
+            via_device_id=config_entry.runtime_data.hub_device_id,
             name=str(device_id),
             manufacturer="Weishaupt",
             model="WEM Portal",
@@ -51,7 +48,7 @@ class WemPortalWritableEntity(WemPortalEntity):
     def __init__(
         self,
         coordinator: WemPortalDataUpdateCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: WemPortalConfigEntry,
         device_id,
         data_key,
         entity_data,

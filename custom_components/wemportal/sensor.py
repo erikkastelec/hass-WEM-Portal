@@ -5,36 +5,46 @@ Sensor platform for wemportal component
 from typing import override
 
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import _LOGGER, DOMAIN
+from .const import _LOGGER
+from .coordinator import WemPortalConfigEntry
 from .entity import WemPortalEntity
 from .utils import fix_value_and_uom, uom_to_device_class, uom_to_state_class
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: WemPortalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Sensor entry setup."""
 
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
-    entities: list[WemPortalSensor] = []
-    for device_id, entity_data in coordinator.data.items():
-        for unique_id, values in entity_data.items():
-            if isinstance(values, int):
-                continue
-            if values["platform"] == "sensor":
-                entities.append(
-                    WemPortalSensor(
-                        coordinator, config_entry, device_id, unique_id, values
+    coordinator = config_entry.runtime_data.coordinator
+    known_sensors: set[tuple[str, str]] = set()
+
+    # Schedules and statistics only show up in later updates, so add new sensors then
+    @callback
+    def _async_add_new_sensors() -> None:
+        entities: list[WemPortalSensor] = []
+        for device_id, entity_data in coordinator.data.items():
+            for unique_id, values in entity_data.items():
+                if isinstance(values, int) or (device_id, unique_id) in known_sensors:
+                    continue
+                if values["platform"] == "sensor":
+                    known_sensors.add((device_id, unique_id))
+                    entities.append(
+                        WemPortalSensor(
+                            coordinator, config_entry, device_id, unique_id, values
+                        )
                     )
-                )
-    async_add_entities(entities)
+        if entities:
+            async_add_entities(entities)
+
+    _async_add_new_sensors()
+    config_entry.async_on_unload(coordinator.async_add_listener(_async_add_new_sensors))
 
 
 class WemPortalSensor(WemPortalEntity, SensorEntity):
@@ -69,7 +79,7 @@ class WemPortalSensor(WemPortalEntity, SensorEntity):
         return val
 
     def __init__(
-        self, coordinator, config_entry: ConfigEntry, device_id, _unique_id, entity_data
+        self, coordinator, config_entry: WemPortalConfigEntry, device_id, _unique_id, entity_data
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator, config_entry, device_id, _unique_id, entity_data)
