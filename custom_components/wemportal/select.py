@@ -4,11 +4,11 @@ Select platform for wemportal component
 
 from typing import override
 
-from fuzzywuzzy import process
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from rapidfuzz import process, utils
 
 from .const import _LOGGER, DOMAIN
 from .entity import WemPortalWritableEntity
@@ -59,7 +59,9 @@ class WemPortalSelect(WemPortalWritableEntity, SelectEntity):
                     self._attr_current_option = self._options_names[self._options.index(int(val))]
                 except (ValueError, TypeError):
                     if val is not None and self._options_names:
-                        best_match, score = process.extractOne(str(val), self._options_names)
+                        best_match, score, _ = process.extractOne(
+                            str(val), self._options_names, processor=utils.default_process
+                        )
                         if score >= 75:
                             self._attr_current_option = best_match
                         else:
@@ -104,7 +106,9 @@ class WemPortalSelect(WemPortalWritableEntity, SelectEntity):
                     self._attr_current_option = self._options_names[self._options.index(int(val))]
                 except (ValueError, TypeError):
                     if val is not None and self._options_names:
-                        best_match, score = process.extractOne(str(val), self._options_names)
+                        best_match, score, _ = process.extractOne(
+                            str(val), self._options_names, processor=utils.default_process
+                        )
                         if score >= 75:
                             self._attr_current_option = best_match
                         else:
