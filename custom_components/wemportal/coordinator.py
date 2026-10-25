@@ -58,13 +58,14 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
         device_registry = dr.async_get(self.hass)
         enabled_devices = []
         for device_id in self.api.data.keys():
-            device_entry = device_registry.async_get_device_by_identifier(
-                (DOMAIN, f"{self.config_entry.entry_id}:{device_id}"),
-                self.config_entry.entry_id,
-            )
-            if device_entry is not None and device_entry.disabled_by is not None:
-                _LOGGER.debug("Skipping disabled device %s", device_id)
-                continue
+            if self.config_entry is not None:
+                device_entry = device_registry.async_get_device_by_identifier(
+                    (DOMAIN, f"{self.config_entry.entry_id}:{device_id}"),
+                    self.config_entry.entry_id,
+                )
+                if device_entry is not None and device_entry.disabled_by is not None:
+                    _LOGGER.debug("Skipping disabled device %s", device_id)
+                    continue
             enabled_devices.append(device_id)
 
         async with asyncio.timeout(DEFAULT_TIMEOUT):
@@ -78,7 +79,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                 raise ConfigEntryAuthFailed("WEM Portal authentication failed. Check your credentials.") from exc
             except (WemPortalError, ForbiddenError) as exc:
                 self.num_failed += 1
-                if self.num_failed >= 2:
+                if self.num_failed >= 2 and self.config_entry is not None:
                     _LOGGER.info("API errors persistent. Re-instantiating WemPortalApi to recover from potentially corrupted session/state.")
                     self.api = WemPortalApi(
                         self.config_entry.data.get(CONF_USERNAME),

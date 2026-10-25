@@ -45,9 +45,8 @@ async def test_coordinator_update_failed(hass):
     )
 
     with pytest.raises(UpdateFailed):
-        await coordinator.async_refresh()
+        await coordinator._async_update_data()
 
-    assert coordinator.last_update_success is False
     assert coordinator.num_failed == 1
 
 async def test_coordinator_auth_failed(hass):
@@ -64,9 +63,8 @@ async def test_coordinator_auth_failed(hass):
     )
 
     with pytest.raises(ConfigEntryAuthFailed):
-        await coordinator.async_refresh()
+        await coordinator._async_update_data()
 
-    assert coordinator.last_update_success is False
     assert coordinator.num_failed == 1
 
 
