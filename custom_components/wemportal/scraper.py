@@ -2,15 +2,12 @@
 
 import logging
 import time
-from collections import defaultdict
-
 from curl_cffi import requests
 from lxml import html
 
 from custom_components.wemportal.const import (
     BOOLEAN_OFF_STRINGS,
     BOOLEAN_ON_STRINGS,
-    ENERGY_POWER_KEYWORDS,
     MISSING_DATA_STRINGS,
     PERCENTAGE_KEYWORDS,
     TEMPERATURE_KEYWORDS,
