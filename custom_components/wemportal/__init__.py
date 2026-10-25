@@ -7,26 +7,25 @@ https://github.com/erikkastelec/hass-WEM-Portal
 """
 from datetime import timedelta
 
-import homeassistant.helpers.config_validation as config_validation
-import voluptuous as vol
+import homeassistant.helpers.entity_registry as entity_registry
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as device_registry
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.config_entries import ConfigEntry
+
 from .const import (
-    CONF_LANGUAGE,
+    _LOGGER,
     CONF_MODE,
     CONF_SCAN_INTERVAL_API,
-    DOMAIN,
-    PLATFORMS,
-    _LOGGER,
     DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
     DEFAULT_CONF_SCAN_INTERVAL_VALUE,
+    DOMAIN,
+    PLATFORMS,
 )
 from .coordinator import WemPortalDataUpdateCoordinator
 from .wemportalapi import WemPortalApi
-import homeassistant.helpers.entity_registry as entity_registry
-from homeassistant.helpers import device_registry as device_registry
+
 
 def get_wemportal_unique_id(config_entry_id: str, device_id: str, name: str):
     """Return unique ID for WEM Portal."""
@@ -126,14 +125,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ),
         )
 
-    # Currently we only support one device so we will take first device id
-    device_id = "0000"
     dr = device_registry.async_get(hass)
-    devices = [
-        device
-        for device in dr.devices.values()
-        if entry.entry_id in device.config_entries
-    ]
+    devices = device_registry.async_entries_for_config_entry(dr, entry.entry_id)
     device_ids = [device.name for device in devices]
     if not device_ids:
         _LOGGER.warning("No devices found for %s. Starting first time initialization.", DOMAIN)
@@ -157,20 +150,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Migrating entity names for wemportal")
     await migrate_unique_ids(hass, entry, coordinator)
 
-    hass.data[DOMAIN][entry.entry_id] = {
-        "api": api,
-        # "config": entry.data,
-        "coordinator": coordinator,
-    }
-
-    # Register the hub device so child devices can reference it via via_device
-    device_registry.async_get(hass).async_get_or_create(
+    # Register the hub device so child devices can reference it via via_device_id
+    hub_device = dr.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, entry.entry_id)},
         manufacturer="Weishaupt",
         name=entry.title or "WEM Portal",
         model="WEM Portal",
     )
+
+    hass.data[DOMAIN][entry.entry_id] = {
+        "api": api,
+        # "config": entry.data,
+        "coordinator": coordinator,
+        "hub_device_id": hub_device.id,
+    }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))

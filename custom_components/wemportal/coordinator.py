@@ -1,21 +1,29 @@
 """ WemPortal integration coordinator """
 from __future__ import annotations
 import asyncio
+
 from time import monotonic
-import copy
+from typing import override
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
-from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers import device_registry as dr
-from .exceptions import ForbiddenError, ServerError, WemPortalError, AuthError
-from .const import _LOGGER, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE, DEFAULT_TIMEOUT, DOMAIN
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+
+from .const import (
+    _LOGGER,
+    DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
+    DEFAULT_TIMEOUT,
+    DOMAIN,
+)
+from .exceptions import AuthError, ForbiddenError, WemPortalError
 from .wemportalapi import WemPortalApi
+
 
 class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
     """DataUpdateCoordinator for wemportal component"""
@@ -41,6 +49,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
         self.num_failed = 0
 
 
+    @override
     async def _async_update_data(self):
         """Fetch data from the wemportal api"""
         if self.num_failed > 2 and monotonic() - self.last_try < DEFAULT_CONF_SCAN_INTERVAL_API_VALUE:
@@ -49,7 +58,10 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
         device_registry = dr.async_get(self.hass)
         enabled_devices = []
         for device_id in self.api.data.keys():
-            device_entry = device_registry.async_get_device(identifiers={(DOMAIN, str(device_id))})
+            device_entry = device_registry.async_get_device_by_identifier(
+                (DOMAIN, f"{self.config_entry.entry_id}:{device_id}"),
+                self.config_entry.entry_id,
+            )
             if device_entry is not None and device_entry.disabled_by is not None:
                 _LOGGER.debug("Skipping disabled device %s", device_id)
                 continue
