@@ -52,10 +52,11 @@ async def test_slow_data_after_first_refresh(
     await _tick(hass, freezer, timedelta(seconds=1))
     assert mock_wemportal_api.fetch_data.call_args_list == [call([], False), call([], True)]
 
-    await _tick(hass, freezer, UPDATE_INTERVAL - timedelta(seconds=1))
+    # HA adds up to a second of jitter to the schedule, so check with some margin
+    await _tick(hass, freezer, UPDATE_INTERVAL - timedelta(seconds=2))
     assert mock_wemportal_api.fetch_data.call_count == 2
 
-    await _tick(hass, freezer, timedelta(seconds=1))
+    await _tick(hass, freezer, timedelta(seconds=4))
     assert mock_wemportal_api.fetch_data.call_args_list[-1] == call([], True)
     assert mock_wemportal_api.fetch_data.call_count == 3
 
