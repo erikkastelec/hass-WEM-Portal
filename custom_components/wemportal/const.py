@@ -24,6 +24,8 @@ DEFAULT_MODE: Final = "api"
 AVAILABLE_MODES: Final = ["api", "web", "both"]
 PLATFORMS = ["number", "select", "sensor", "switch"]
 REFRESH_WAIT_TIME: Final = 360
+# Schedules and statistics rarely change, so they are fetched less often than values
+SLOW_UPDATE_INTERVAL: Final = 3600
 DATA_GATHERING_ERROR: Final = "An error occurred while gathering data.This issue should resolve by itself. If this problem persists,open an issue at https://github.com/erikkastelec/hass-WEM-Portal/issues"
 DEFAULT_CONF_SCAN_INTERVAL_API_VALUE: Final = 300
 DEFAULT_CONF_SCAN_INTERVAL_VALUE: Final = 1800
@@ -43,7 +45,7 @@ API_STATISTICS_READ_URL: Final = "https://www.wemportal.com/app/Statistics/Read"
 
 # Scraper Constants
 MISSING_DATA_STRINGS: Final = ["--", "label ist null", "label ist null "]
-BOOLEAN_OFF_STRINGS: Final = ["off", "aus"]
+BOOLEAN_OFF_STRINGS: Final = ["off", "aus", "stop"]
 BOOLEAN_ON_STRINGS: Final = ["ein", "on"]
 TEMPERATURE_KEYWORDS: Final = ["temperatur", "temperature", "temp"]
 PERCENTAGE_KEYWORDS: Final = ["leistungsanforderung", "drehzahl", "power_requirement", "speed"]

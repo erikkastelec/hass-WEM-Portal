@@ -2,30 +2,30 @@
 from __future__ import annotations
 
 import logging
+from typing import override
 
+import homeassistant.helpers.config_validation as config_validation
 import voluptuous as vol
-
+from homeassistant import exceptions
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     OptionsFlow,
 )
-
-from homeassistant import exceptions
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
-from homeassistant.core import callback, HomeAssistant
-import homeassistant.helpers.config_validation as config_validation
-from .wemportalapi import WemPortalApi
+from homeassistant.core import HomeAssistant, callback
+
 from .const import (
-    DOMAIN,
+    AVAILABLE_MODES,
     CONF_LANGUAGE,
     CONF_MODE,
     CONF_SCAN_INTERVAL_API,
+    DEFAULT_CONF_LANGUAGE_VALUE,
     DEFAULT_MODE,
-    AVAILABLE_MODES,
-    DEFAULT_CONF_LANGUAGE_VALUE
+    DOMAIN,
 )
 from .exceptions import AuthError
+from .wemportalapi import WemPortalApi
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,12 +75,14 @@ class WemPortalConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     @callback
+    @override
     def async_get_options_flow(
         config_entry: ConfigEntry,
     ):
         """Get the options flow for this handler."""
         return WemportalOptionsFlow()
 
+    @override
     async def async_step_user(self, user_input=None):
         """Handle the initial step."""
         errors = {}
@@ -116,6 +118,7 @@ class WemPortalConfigFlow(ConfigFlow, domain=DOMAIN):
 class WemportalOptionsFlow(OptionsFlow):
     """Handle options."""
 
+    @override
     async def async_step_init(self, user_input=None):
         """Manage the options."""
         if user_input is not None:

@@ -1,3 +1,4 @@
 {
-  "name": "Weishaupt WEM Portal"
+  "name": "Weishaupt WEM Portal",
+  "homeassistant": "2026.8.0"
 }

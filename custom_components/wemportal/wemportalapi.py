@@ -41,6 +41,7 @@ from .const import (
     DEFAULT_CONF_MODE_VALUE,
     DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
     DEFAULT_CONF_SCAN_INTERVAL_VALUE,
+    SLOW_UPDATE_INTERVAL,
 )
 
 
@@ -85,6 +86,9 @@ class WemPortalApi:
         }
         self.scraping_mapper = {}
         self.last_statistics_fetch = 0.0
+        self.last_circuit_times_fetch = 0.0
+        # Requests that failed last time, so repeated failures are only logged once
+        self.failing_requests: set[str] = set()
 
         # Used to keep track of how many update intervals to wait before retrying spider
         self.spider_wait_interval = 0
@@ -378,7 +382,8 @@ class WemPortalApi:
     def get_response_details(self, response: reqs.Response):
         server_status = ""
         server_message = ""
-        if response:
+        # A requests.Response is falsy for 4xx/5xx, which are the responses we need here
+        if response is not None:
             try:
                 response_data = response.json()
                 _LOGGER.debug(response_data)
@@ -394,11 +399,11 @@ class WemPortalApi:
         self, url: str, headers=None, data=None, do_retry=True, delay=5
     ) -> reqs.Response:
         attempts = 2 if do_retry else 1
-        response = None
 
         for attempt in range(attempts):
             time.sleep(1)  # Wait 1 sec between requests to be graceful to the API.
             current_headers = headers or self.headers.copy()
+            response = None
 
             try:
                 if not data:
@@ -420,7 +425,7 @@ class WemPortalApi:
             except (reqs.exceptions.RequestException, ExpiredSessionError) as exc:
                 is_auth_error = isinstance(exc, ExpiredSessionError) or (
                     isinstance(exc, reqs.exceptions.RequestException)
-                    and response
+                    and response is not None
                     and response.status_code in (401, 403)
                 )
 
@@ -433,13 +438,13 @@ class WemPortalApi:
                 # If we're out of retries or it's a completely different error:
                 server_status, server_message = self.get_response_details(response)
                 
-                # The old logic recreated the entire API instance when this happened.
-                # To emulate that recovery mechanism without losing cached metadata,
-                # we invalidate the login state so the next cycle creates a fresh requests.Session.
-                self.valid_login = False
-                
+                # Log in with a fresh session next cycle. A failing optional endpoint
+                # (schedules, statistics) doesn't mean the session is broken.
+                if is_auth_error:
+                    self.valid_login = False
+
                 raise WemPortalError(
-                    f"{DATA_GATHERING_ERROR} Server returned status code: {server_status} and message: {server_message}"
+                    f"{DATA_GATHERING_ERROR} Request failed: {exc}. Server returned internal status code: {server_status} and message: {server_message}"
                 ) from exc
 
         return response
@@ -591,6 +596,10 @@ class WemPortalApi:
         _LOGGER.debug("Fetching fresh api data. enabled_devices=%s, self.data.keys()=%s", enabled_devices, list(self.data.keys()))
         target_devices = enabled_devices if enabled_devices else list(self.data.keys())
         _LOGGER.debug("Computed target_devices=%s", target_devices)
+        now = time.time()
+        fetch_circuit_times = now - self.last_circuit_times_fetch >= SLOW_UPDATE_INTERVAL
+        if fetch_circuit_times:
+            self.last_circuit_times_fetch = now
         for device_id in target_devices:
             _LOGGER.debug("Processing device_id=%s (type %s). Is in self.data? %s", device_id, type(device_id), str(device_id) in self.data)
             if str(device_id) not in self.data:
@@ -650,12 +659,14 @@ class WemPortalApi:
                     "icon": "mdi:message-alert"
                 }
 
+                self._log_request_success(f"device status (device {device_id})")
+
                 if conn_status != "online":
                     _LOGGER.warning("Device %s is %s. Skipping data polling.", device_id, conn_status)
                     continue
 
             except Exception as exc:
-                _LOGGER.warning("Failed to fetch Device Status: %s", exc)
+                self._log_request_failure(f"device status (device {device_id})", exc)
 
             # 2. Proceed with data fetch
             try:
@@ -699,83 +710,94 @@ class WemPortalApi:
                     mode=self.mode,
                     api_data=self.data,
                 )
+                self._log_request_success(f"parameter data (device {device_id})")
             except Exception as exc:
-                _LOGGER.warning("Failed to fetch parameter data... %s", exc)
+                self._log_request_failure(f"parameter data (device {device_id})", exc)
+                # Errors are swallowed here, so recover a possibly broken session by
+                # logging in again next cycle
+                self.valid_login = False
 
-            # 3. Fetch Heating Schedules (DataType == 6)
-            try:
-                for module in self.modules[device_id].values():
-                    module_index = module.get("Index")
-                    module_type = module.get("Type")
-                    if "parameters" in module:
-                        for param_id, param_data in module["parameters"].items():
-                            if param_data.get("DataType") == 6:  # WemDataType.PROGRAM
-                                try:
-                                    refresh_payload = {
-                                        "DeviceID": int(device_id),
-                                        "ModuleIndex": module_index,
-                                        "ModuleType": module_type,
-                                        "ParameterID": param_id
-                                    }
-
-                                    job_resp = self.make_api_call(
-                                        API_CIRCUIT_TIMES_REFRESH_URL,
-                                        data=refresh_payload,
-                                        do_retry=True
-                                    ).json()
-
-                                    job_id = job_resp.get("JobID")
-                                    if job_id is None:
-                                        continue
-
-                                    time.sleep(2)  # Give backend time to build the schedule payload
-
-                                    read_payload = {
-                                        "DeviceID": int(device_id),
-                                        "JobID": job_id,
-                                        "ModuleIndex": module_index,
-                                        "ModuleType": module_type,
-                                        "ParameterID": param_id
-                                    }
-
-                                    schedule_resp = self.make_api_call(
-                                        API_CIRCUIT_TIMES_READ_URL,
-                                        data=read_payload,
-                                        do_retry=True
-                                    ).json()
-
-                                    sensor_name = f"{module['Name']}-{param_id}"
-                                    if sensor_name not in self.data[device_id]:
-                                        from .translations import friendly_name_mapper, translate
-                                        self.data[device_id][sensor_name] = {
-                                            "friendlyName": translate(self.language, friendly_name_mapper(param_id)),
-                                            "ParameterID": param_id,
-                                            "unit": None,
-                                            "value": "Active",
-                                            "IsWriteable": False,
-                                            "DataType": 6,
-                                            "ModuleIndex": module_index,
-                                            "ModuleType": module_type,
-                                            "platform": "sensor",
-                                            "icon": "mdi:calendar-clock",
-                                        }
-
-                                    self.data[device_id][sensor_name]["CircuitTimesDay"] = schedule_resp.get("CircuitTimesDay", [])
-                                    self.data[device_id][sensor_name]["PossibleValues"] = schedule_resp.get("PossibleValues", [])
-                                    self.data[device_id][sensor_name]["value"] = "Active"
-
-                                except Exception as exc:
-                                    _LOGGER.warning("Failed to fetch CircuitTimes for %s: %s", param_id, exc)
-            except Exception as exc:
-                _LOGGER.warning("Error processing CircuitTimes: %s", exc)
+            # 3. Fetch Heating Schedules (Rate limited)
+            if fetch_circuit_times:
+                self.get_circuit_times(device_id)
 
         # 4. Fetch Energy Statistics (Rate limited)
         self.get_statistics(enabled_devices)
 
+    def get_circuit_times(self, device_id):
+        """Fetch the heating schedules (DataType == 6) of a device."""
+        try:
+            for module in self.modules[device_id].values():
+                module_index = module.get("Index")
+                module_type = module.get("Type")
+                if "parameters" in module:
+                    for param_id, param_data in module["parameters"].items():
+                        if param_data.get("DataType") == 6:  # WemDataType.PROGRAM
+                            request = f"CircuitTimes for {param_id} (device {device_id})"
+                            try:
+                                refresh_payload = {
+                                    "DeviceID": int(device_id),
+                                    "ModuleIndex": module_index,
+                                    "ModuleType": module_type,
+                                    "ParameterID": param_id
+                                }
+
+                                job_resp = self.make_api_call(
+                                    API_CIRCUIT_TIMES_REFRESH_URL,
+                                    data=refresh_payload,
+                                    do_retry=True
+                                ).json()
+
+                                job_id = job_resp.get("JobID")
+                                if job_id is None:
+                                    continue
+
+                                time.sleep(2)  # Give backend time to build the schedule payload
+
+                                read_payload = {
+                                    "DeviceID": int(device_id),
+                                    "JobID": job_id,
+                                    "ModuleIndex": module_index,
+                                    "ModuleType": module_type,
+                                    "ParameterID": param_id
+                                }
+
+                                schedule_resp = self.make_api_call(
+                                    API_CIRCUIT_TIMES_READ_URL,
+                                    data=read_payload,
+                                    do_retry=True
+                                ).json()
+
+                                sensor_name = f"{module['Name']}-{param_id}"
+                                if sensor_name not in self.data[device_id]:
+                                    from .translations import friendly_name_mapper, translate
+                                    self.data[device_id][sensor_name] = {
+                                        "friendlyName": translate(self.language, friendly_name_mapper(param_id)),
+                                        "ParameterID": param_id,
+                                        "unit": None,
+                                        "value": "Active",
+                                        "IsWriteable": False,
+                                        "DataType": 6,
+                                        "ModuleIndex": module_index,
+                                        "ModuleType": module_type,
+                                        "platform": "sensor",
+                                        "icon": "mdi:calendar-clock",
+                                    }
+
+                                self.data[device_id][sensor_name]["CircuitTimesDay"] = schedule_resp.get("CircuitTimesDay", [])
+                                self.data[device_id][sensor_name]["PossibleValues"] = schedule_resp.get("PossibleValues", [])
+                                self.data[device_id][sensor_name]["value"] = "Active"
+                                self._log_request_success(request)
+
+                            except Exception as exc:
+                                self._log_request_failure(request, exc)
+        except Exception as exc:
+            self._log_request_failure(f"CircuitTimes (device {device_id})", exc)
+
     def get_statistics(self, enabled_devices=None):
         """Fetch historical statistics from the API, rate limited to once per hour."""
         now = time.time()
-        if self.last_statistics_fetch is not None and (now - self.last_statistics_fetch) < 3600:
+        if self.last_statistics_fetch is not None and (now - self.last_statistics_fetch) < SLOW_UPDATE_INTERVAL:
             return
             
         self.last_statistics_fetch = now
@@ -825,7 +847,8 @@ class WemPortalApi:
                         "GroupType": group_id,
                         "Type": 1
                     }
-                    
+                    request = f"Statistics for group {group_id} (device {device_id})"
+
                     try:
                         time.sleep(2)  # Avoid hammering the API
                         stats_resp = self.make_api_call(
@@ -835,6 +858,7 @@ class WemPortalApi:
                             do_retry=True
                         ).json()
                         
+                        self._log_request_success(request)
                         values = stats_resp.get("Values", [])
                         if not values:
                             continue
@@ -870,7 +894,21 @@ class WemPortalApi:
                         }
                         
                     except Exception as exc:
-                        _LOGGER.warning("Failed to fetch Statistics for group %s: %s", group_id, exc)
-                        
+                        self._log_request_failure(request, exc)
+
             except Exception as exc:
-                _LOGGER.warning("Error processing Statistics: %s", exc)
+                self._log_request_failure(f"Statistics (device {device_id})", exc)
+
+    def _log_request_failure(self, request: str, exc: Exception) -> None:
+        """Log a failed request as a warning once, then as debug while it keeps failing."""
+        if request in self.failing_requests:
+            _LOGGER.debug("Failed to fetch %s: %s", request, exc)
+            return
+        self.failing_requests.add(request)
+        _LOGGER.warning("Failed to fetch %s: %s", request, exc)
+
+    def _log_request_success(self, request: str) -> None:
+        """Log once that a previously failing request works again."""
+        if request in self.failing_requests:
+            self.failing_requests.discard(request)
+            _LOGGER.info("Fetching %s works again", request)

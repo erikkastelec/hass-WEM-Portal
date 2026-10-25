@@ -1,0 +1,47 @@
+{
+  "1234": {
+    "Wärmeerzeuger-Temperatur": {
+      "friendlyName": "Temperature",
+      "ParameterID": "Temperatur",
+      "unit": "°C",
+      "value": 21.5,
+      "icon": "mdi:thermometer",
+      "platform": "sensor"
+    },
+    "Heizkreis-Komfort": {
+      "friendlyName": "Comfort temperature",
+      "ParameterID": "Komfort",
+      "unit": "°C",
+      "value": 20.0,
+      "icon": "mdi:thermometer",
+      "platform": "number",
+      "min_value": 5.0,
+      "max_value": 35.0,
+      "step": 0.5,
+      "ModuleIndex": 1,
+      "ModuleType": 2
+    },
+    "Heizkreis-Betriebsart": {
+      "friendlyName": "Operating mode",
+      "ParameterID": "Betriebsart",
+      "unit": null,
+      "value": 1,
+      "icon": "mdi:flash",
+      "platform": "select",
+      "options": [0, 1],
+      "optionsNames": ["Standby", "Automatic"],
+      "ModuleIndex": 1,
+      "ModuleType": 2
+    },
+    "Warmwasser-Push": {
+      "friendlyName": "Hot water push",
+      "ParameterID": "Push",
+      "unit": null,
+      "value": 0.0,
+      "icon": "mdi:flash",
+      "platform": "switch",
+      "ModuleIndex": 2,
+      "ModuleType": 3
+    }
+  }
+}
