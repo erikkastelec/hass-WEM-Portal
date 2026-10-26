@@ -12,6 +12,7 @@ from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
@@ -85,6 +86,8 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
     @override
     async def _async_setup(self) -> None:
         """Create the API with the parameter definitions saved earlier."""
+        # Its own session, as the login sets cookies; HA detaches it when the entry unloads
+        self._session = async_create_clientsession(self.hass)
         self.api = self._create_api(parameter_cache=await self._store.async_load())
 
     def _create_api(self, existing_data=None, parameter_cache=None) -> WemPortalApi:
@@ -92,6 +95,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
         return WemPortalApi(
             self.config_entry.data[CONF_USERNAME],
             self.config_entry.data[CONF_PASSWORD],
+            self._session,
             config=self.config_entry.options,
             existing_data=existing_data,
             parameter_cache=parameter_cache,
@@ -122,9 +126,7 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
                 include_slow = self.data is not None
                 if include_slow:
                     self.update_interval = self.regular_update_interval
-                data = await self.hass.async_add_executor_job(
-                    self.api.fetch_data, enabled_devices, include_slow
-                )
+                data = await self.api.fetch_data(enabled_devices, include_slow)
             except AuthError as exc:
                 self.num_failed += 1
                 _LOGGER.error("Authentication error, raising ConfigEntryAuthFailed: %s", exc)

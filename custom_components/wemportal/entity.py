@@ -60,8 +60,7 @@ class WemPortalWritableEntity(WemPortalEntity):
 
     async def _async_change_value(self, value) -> None:
         """Write a new value for this parameter to the WEM Portal."""
-        await self.hass.async_add_executor_job(
-            self.coordinator.api.change_value,
+        await self.coordinator.api.change_value(
             self._device_id,
             self._parameter_id,
             self._module_index,

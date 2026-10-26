@@ -14,6 +14,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .const import (
     AVAILABLE_MODES,
@@ -25,6 +26,7 @@ from .const import (
     DOMAIN,
 )
 from .exceptions import AuthError
+from .scraper import WemPortalScraper
 from .wemportalapi import WemPortalApi
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,21 +44,25 @@ DATA_SCHEMA = vol.Schema(
 async def validate_input(hass: HomeAssistant, data):
     """Validate the user input allows us to connect."""
     # Create API object for authentication check
-    api = WemPortalApi(data[CONF_USERNAME], data[CONF_PASSWORD])
+    session = async_create_clientsession(hass, auto_cleanup=False)
+    api = WemPortalApi(data[CONF_USERNAME], data[CONF_PASSWORD], session)
+    scraper = WemPortalScraper(data[CONF_USERNAME], data[CONF_PASSWORD])
 
     try:
         if data[CONF_MODE] in ("api", "both"):
             try:
-                await hass.async_add_executor_job(api.api_login)
+                await api.api_login()
             except AuthError:
                 _LOGGER.warning("Mobile API login failed, trying web login...")
-                await hass.async_add_executor_job(api.web_login)
+                await scraper.login()
         elif data[CONF_MODE] == "web":
-            await hass.async_add_executor_job(api.web_login)
+            await scraper.login()
     except AuthError as exc:
         raise InvalidAuth from exc
     except Exception as exc:
         raise CannotConnect from exc
+    finally:
+        session.detach()
 
     return data
 
