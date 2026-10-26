@@ -3,79 +3,125 @@ Weishaupt webscraping and API library
 """
 
 
+import asyncio
 import copy
+import json
 import time
-from datetime import datetime, timedelta
 
-from bs4 import BeautifulSoup
-import requests as reqs
+import aiohttp
 from homeassistant.const import CONF_SCAN_INTERVAL
-from .exceptions import (
-    AuthError,
-    ForbiddenError,
-    UnknownAuthError,
-    WemPortalError,
-    ExpiredSessionError,
-    ParameterChangeError,
-    ServerError,
-)
 
 from .const import (
     _LOGGER,
+    API_CIRCUIT_TIMES_READ_URL,
+    API_CIRCUIT_TIMES_REFRESH_URL,
     API_DATA_ACCESS_READ_URL,
     API_DATA_ACCESS_WRITE_URL,
     API_DEVICE_READ_URL,
+    API_DEVICE_STATUS_READ_URL,
     API_EVENT_TYPE_READ_URL,
     API_LOGIN_URL,
     API_REFRESH_URL,
-    API_DEVICE_STATUS_READ_URL,
-    API_CIRCUIT_TIMES_REFRESH_URL,
-    API_CIRCUIT_TIMES_READ_URL,
-    API_STATISTICS_REFRESH_URL,
     API_STATISTICS_READ_URL,
+    API_STATISTICS_REFRESH_URL,
     CONF_LANGUAGE,
     CONF_MODE,
-    CONF_SCAN_INTERVAL_API,
     DATA_GATHERING_ERROR,
     DEFAULT_CONF_LANGUAGE_VALUE,
     DEFAULT_CONF_MODE_VALUE,
-    DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
     DEFAULT_CONF_SCAN_INTERVAL_VALUE,
     SLOW_UPDATE_INTERVAL,
+    STATISTICS_MODULE_TYPE,
 )
+from .exceptions import (
+    AuthError,
+    ExpiredSessionError,
+    ForbiddenError,
+    ParameterChangeError,
+    ServerError,
+    UnknownAuthError,
+    WemPortalError,
+)
+from .mapper import WemPortalDataMapper
+from .scraper import WemPortalScraper
+from .translations import friendly_name_mapper, translate
+
+# Like requests' timeout of 10 s to connect and 10 s between bytes read
+REQUEST_TIMEOUT = aiohttp.ClientTimeout(sock_connect=10, sock_read=10)
+# Seconds to wait after logging in again before retrying a request
+RELOGIN_DELAY = 5
+
+LOGIN_ERRORS = {400: AuthError, 403: ForbiddenError, 500: ServerError}
+
+# Used when the portal doesn't return a description for a statistics group
+STATISTICS_FALLBACK_NAMES = {
+    1: "Heating Energy Yield",
+    2: "Hot Water Energy Yield",
+    3: "Cooling Energy Yield",
+    4: "Total Energy Yield",
+    5: "Power Consumption Heating",
+    6: "Power Consumption Hot Water",
+    7: "Power Consumption Cooling",
+    8: "Total Power Consumption",
+}
+
+
+def _virtual_sensor(friendly_name, parameter_id, value, icon, unit=None, **extra):
+    """Return the data of a sensor that isn't a WEM Portal parameter."""
+    return {
+        "friendlyName": friendly_name,
+        "ParameterID": parameter_id,
+        "unit": unit,
+        "value": value,
+        "IsWriteable": False,
+        "DataType": -1,
+        "ModuleIndex": -1,
+        "ModuleType": -1,
+        "platform": "sensor",
+        "icon": icon,
+        **extra,
+    }
+
+
+def _response_details(body):
+    """Return the internal status and message of a mobile API response body."""
+    try:
+        response_data = json.loads(body)
+        return response_data["Status"], response_data["Message"]
+    except (KeyError, TypeError, ValueError):
+        return "", ""
+
+
+def _module_signature(device_modules):
+    """Return what identifies the modules of a device, including their firmware."""
+    return sorted(
+        f"{module['Index']}-{module['Type']}-{module.get('FWUVersion', '')}"
+        for module in device_modules
+    )
 
 
 class WemPortalApi:
     """Wrapper class for Weishaupt WEM Portal"""
 
-    def __init__(self, username, password, config=None, existing_data=None) -> None:
+    def __init__(
+        self, username, password, session, config=None, existing_data=None, parameter_cache=None
+    ) -> None:
         if config is None:
             config = {}
         self.data = copy.deepcopy(existing_data) if existing_data else {}
+        # Parameter definitions per device, saved to disk as fetching them takes about 6 s per module
+        self.parameter_cache = copy.deepcopy(parameter_cache) if parameter_cache else {}
+        # Set when the parameter cache needs saving
+        self.parameter_cache_changed = False
+        self.device_modules: dict[str, list[dict]] = {}
         self.username = username
         self.password = password
         self.mode = config.get(CONF_MODE, DEFAULT_CONF_MODE_VALUE)
-        self.update_interval = timedelta(
-            seconds=min(
-                config.get(CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE),
-                config.get(
-                    CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
-                ),
-            )
-        )
-        self.scan_interval = timedelta(
-            seconds=config.get(CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE)
-        )
-        self.scan_interval_api = timedelta(
-            seconds=config.get(
-                CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
-            )
-        )
+        self.scan_interval = config.get(CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE)
         self.valid_login = False
         self.language = config.get(CONF_LANGUAGE, DEFAULT_CONF_LANGUAGE_VALUE)
-        self.session = None
+        self.session = session
         self.modules = None
-        self.webscraping_cookie = {}
         self.last_scraping_update = None
         # Headers used for all API calls
         self.headers = {
@@ -86,97 +132,69 @@ class WemPortalApi:
         }
         self.scraping_mapper = {}
         self.last_statistics_fetch = 0.0
+        # Indexes of the device modules (Type 9) per device, and the one that has the statistics
+        self.statistics_module_candidates: dict[str, list[int]] = {}
+        self.statistics_modules: dict[str, int] = {}
+        # Statistics groups per device that returned data, as not every listed group is available
+        self.statistics_groups: dict[str, set[int]] = {}
         self.last_circuit_times_fetch = 0.0
         # Requests that failed last time, so repeated failures are only logged once
         self.failing_requests: set[str] = set()
-
-        # Used to keep track of how many update intervals to wait before retrying spider
-        self.spider_wait_interval = 0
-        # Used to keep track of the number of times the spider consecutively fails
-        self.spider_retry_count = 0
         self.api_version = None
 
-    def fetch_data(self, enabled_devices=None):
+    async def fetch_data(self, enabled_devices=None, include_slow=True):
+        """Fetch the data, where include_slow also fetches schedules and statistics."""
         try:
             if self.mode != "web":
                 # Login and get device info
                 if not self.valid_login:
-                    self.api_login()
+                    await self.api_login()
                 # Fetch device and parameter data only at start, or recover missing metadata
                 if self.modules is None:
-                    self.get_devices()
-                    self.get_parameters()
-                else:
-                    needs_recovery = False
-                    for _, modules in self.modules.items():
-                        for module in modules.values():
-                            if "parameters" not in module:
-                                needs_recovery = True
-                                break
-                    if needs_recovery:
-                        _LOGGER.info("Attempting to recover missing parameter definitions...")
-                        self.get_parameters()
-
-            # Select data source based on mode
-            if self.mode == "web":
-                # Get data by web scraping
-                webscraping_data = self.fetch_webscraping_data()
-                self._merge_webscraping_data(next(iter(self.data), "0000"), webscraping_data)
-            elif self.mode == "api":
-                # Get data using API
-                self.get_data(enabled_devices)
-            else:
-                # Get data using web scraping if it hasn't been updated recently,
-                # otherwise use API to get data
-                if self.last_scraping_update is None or (
-                    (
-                        (
-                            datetime.now()
-                            - self.last_scraping_update
-                            + timedelta(seconds=10)
-                        )
-                        > self.scan_interval
-                    )
-                    and self.spider_wait_interval == 0
+                    await self.get_devices()
+                    self._restore_parameters()
+                    await self.get_parameters()
+                    self._update_parameter_cache()
+                elif any(
+                    "parameters" not in module
+                    for modules in self.modules.values()
+                    for module in modules.values()
                 ):
-                    # Get data by web scraping
+                    _LOGGER.info("Attempting to recover missing parameter definitions...")
+                    await self.get_parameters()
+
+            if self.mode == "web":
+                self._merge_webscraping_data(next(iter(self.data), "0000"), await self.fetch_webscraping_data())
+            elif self.mode == "api":
+                await self.get_data(enabled_devices, include_slow)
+            else:
+                # Scrape once per scan interval, with 10 s of slack for the poll timing
+                if (
+                    self.last_scraping_update is None
+                    or time.monotonic() - self.last_scraping_update + 10 > self.scan_interval
+                ):
                     try:
-                        webscraping_data = self.fetch_webscraping_data()
-                        self._merge_webscraping_data(next(iter(self.data), "0000"), webscraping_data)
-
-                        # Update last_scraping_update timestamp
-                        self.last_scraping_update = datetime.now()
+                        self._merge_webscraping_data(next(iter(self.data), "0000"), await self.fetch_webscraping_data())
+                        self.last_scraping_update = time.monotonic()
                     except Exception as exc:
+                        # Don't raise, so the API can still fetch the bulk of the data
                         _LOGGER.warning("Web scraper failed this cycle. Falling back to API only. Error: %s", exc)
-                        # We intentionally do not raise, so the API can still fetch the bulk of the data
-                        
-                else:
-                    # Reduce spider_wait_interval by 1 if > 0
-                    self.spider_wait_interval = (
-                        self.spider_wait_interval - 1
-                        if self.spider_wait_interval > 0
-                        else self.spider_wait_interval
-                    )
 
-                # Get data using API (always run as a resilient fallback)
-                self.get_data(enabled_devices)
+                # The API always runs as a resilient fallback
+                await self.get_data(enabled_devices, include_slow)
 
-
-            # Return data
             return self.data
 
+        except WemPortalError:
+            raise
         except Exception as exc:
-            if isinstance(exc, WemPortalError):
-                # Re-raise known errors so we don't wrap them twice
-                raise
-            # Wrap any unexpected python crashes to prevent HA from halting
+            # Wrap unexpected errors so the coordinator treats them as a failed update
             raise WemPortalError("Unexpected error occurred while fetching data") from exc
 
     def _merge_webscraping_data(self, device_id, webscraping_data):
         if str(device_id) not in self.data:
             self.data[str(device_id)] = {}
-            
-        from .translations import translate
+
         for key, new_val in webscraping_data.items():
             if isinstance(new_val, dict):
                 if "friendlyName" in new_val:
@@ -191,64 +209,18 @@ class WemPortalApi:
                         
             self.data[str(device_id)][key] = new_val
 
-    def fetch_webscraping_data(self):
-        """
-        Call scraper to crawl WEM Portal.
-        This function manages the process of initiating a web scraping job, 
-        handling errors, and returning the scraped data.
-        """
-        from .scraper import WemPortalScraper
-
-        # Set up the web scraping job with necessary parameters
-        scraper = WemPortalScraper(
-            self.username, 
-            self.password, 
-            self.webscraping_cookie
-        )
-
+    async def fetch_webscraping_data(self):
+        """Scrape the expert page of the WEM Portal."""
         try:
-            # Attempt to run the scraping job and extract the first result
-            data = scraper.scrape()[0]
-
-        except IndexError as exc:
-            # Handle the case where the job result is not found
-            self.spider_retry_count += 1
-            if self.spider_retry_count == 2:
-                self.webscraping_cookie = None
-            self.spider_wait_interval = self.spider_retry_count
-            raise WemPortalError(DATA_GATHERING_ERROR) from exc
-
+            data = (await WemPortalScraper(self.username, self.password).scrape())[0]
         except AuthError as exc:
-            # Handle authentication errors
-            self.webscraping_cookie = None
             raise AuthError(
                 "AuthenticationError: Could not login with provided username and password. "
                 "Check if your config contains the right credentials"
             ) from exc
-
-        except ExpiredSessionError as exc:
-            # Handle errors due to expired session
-            self.webscraping_cookie = None
-            raise ExpiredSessionError(
-                "ExpiredSessionError: Session expired. Next update will try to login again."
-            ) from exc
-
-        try:
-            # Attempt to update the cookie from the scraped data
-            self.webscraping_cookie = data["cookie"]
-            del data["cookie"]
-        except KeyError:
-            # If the cookie is not found in the data, simply pass
-            pass
-
-        # Reset retry count and wait interval after a successful operation
-        self.spider_retry_count = 0
-        self.spider_wait_interval = 0
-
-        # Return the scraped data
         return data
 
-    def api_login(self):
+    async def api_login(self):
         payload = {
             "Name": self.username,
             "PasswordUTF8": self.password,
@@ -256,181 +228,75 @@ class WemPortalApi:
             "AppVersion": "2.0.2",
             "ClientOS": "Android",
         }
-        if self.session is not None:
-            self.session.close()
-        self.session = reqs.Session()
-        self.session.cookies.clear()
-        self.session.headers.update(self.headers)
+        self.valid_login = False
+        self.session.cookie_jar.clear()
         try:
-            response = self.session.post(
-                API_LOGIN_URL,
-                data=payload,
+            async with self.session.post(
+                API_LOGIN_URL, data=payload, headers=self.headers, timeout=REQUEST_TIMEOUT
+            ) as response:
+                status = response.status
+                body = await response.text()
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise WemPortalError(f"API login failed: {exc}") from exc
+
+        if status >= 400:
+            _LOGGER.warning("API login failed for %s with HTTP status %s.", self.username, status)
+            response_status, response_message = _response_details(body)
+            raise LOGIN_ERRORS.get(status, UnknownAuthError)(
+                f"API login failed with HTTP status {status}. Server returned internal status code: {response_status} and message: {response_message}"
             )
-            response.raise_for_status()
-            
-            # Verify the response is actually valid JSON and successful
-            response_data = response.json()
-            if response_data.get("Status") != 0:
-                raise AuthError(f"Login failed: Server returned {response_data}")
-                
-            self.api_version = response_data.get("Version")
-            _LOGGER.debug("API login successful for %s", self.username)
-            self.valid_login = True
-            
-        except ValueError as exc: # Catches JSONDecodeError if response is HTML
+
+        try:
+            response_data = json.loads(body)
+        except ValueError as exc:
             _LOGGER.warning("API login failed for %s. Received HTML instead of JSON.", self.username)
-            self.valid_login = False
             raise WemPortalError("API login failed: received HTML instead of JSON (Possible rate limit or WAF block)") from exc
-        except reqs.exceptions.HTTPError as exc:
-            _LOGGER.warning("API login failed for %s with HTTPError.", self.username)
-            self.valid_login = False
-            response_status, response_message = self.get_response_details(response)
-            if response is None:
-                raise UnknownAuthError(
-                    "Authentication Error: Encountered an unknown authentication error."
-                ) from exc
-            elif response.status_code == 400:
-                raise AuthError(
-                    f"Authentication Error: Check if your login credentials are correct. Received response code: {response.status_code}, response: {response.content}. Server returned internal status code: {response_status} and message: {response_message}"
-                ) from exc
-            elif response.status_code == 403:
-                raise ForbiddenError(
-                    f"WemPortal forbidden error: Server returned internal status code: {response_status} and message: {response_message}"
-                ) from exc
-            elif response.status_code == 500:
-                raise ServerError(
-                    f"WemPortal server error: Server returned internal status code: {response_status} and message: {response_message}"
-                ) from exc
-            else:
-                raise UnknownAuthError(
-                    f"Authentication Error: Encountered an unknown authentication error. Received response code: {response.status_code}, response: {response.content}. Server returned internal status code: {response_status} and message: {response_message}"
-                ) from exc
+        if response_data.get("Status") != 0:
+            raise AuthError(f"Login failed: Server returned {response_data}")
 
+        self.api_version = response_data.get("Version")
+        _LOGGER.debug("API login successful for %s", self.username)
+        self.valid_login = True
 
-    def web_login(self):
-        """
-        Logs into the WEM Portal web interface by mimicking browser behavior.
-        Args:
-            username (str): The user's username (email).
-            password (str): The user's password.
-        Returns:
-            dict: Session cookies for the authenticated session.
-        Raises:
-            AuthError: If the login credentials are invalid.
-            ForbiddenError: If access is forbidden.
-            UnknownAuthError: For other unknown login errors.
-        """
-        session = reqs.Session()
-        from .const import WEB_LOGIN_URL
-        login_url = WEB_LOGIN_URL
-
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Accept-Language": "de,en;q=0.9",
-        }
-
-        # Step 1: Fetch the login page
-        try:
-            initial_response = session.get(login_url, headers=headers)
-            initial_response.raise_for_status()
-        except reqs.exceptions.HTTPError as exc:
-            raise UnknownAuthError("Failed to load the login page.") from exc
-
-        # Step 2: Parse the login page and extract hidden form fields
-        soup = BeautifulSoup(initial_response.text, "html.parser")
-        form_data = {}
-        for input_tag in soup.find_all("input"):
-            if input_tag.get("type") == "hidden" and input_tag.get("name"):
-                form_data[input_tag["name"]] = input_tag.get("value", "")
-
-        # Add username and password to the form data
-        form_data["ctl00$content$tbxUserName"] = self.username
-        form_data["ctl00$content$tbxPassword"] = self.password
-        form_data["ctl00$content$btnLogin"] = "Anmelden"  # Login button value
-
-        # Step 3: Submit the login form
-        try:
-            response = session.post(
-                login_url,
-                data=form_data,
-                headers={
-                    **headers,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-            )
-            response.raise_for_status()
-
-            # Step 4: Check if login was successful
-            if "ctl00_btnLogout" in response.text:
-                _LOGGER.debug("WEB login successful for %s", self.username)
-                return
-            else:
-                raise AuthError("Login failed: Invalid username or password.")
-        except reqs.exceptions.HTTPError as exc:
-            if response.status_code == 403:
-                raise ForbiddenError("Access forbidden during login.") from exc
-            raise UnknownAuthError("Failed to submit the login form.") from exc
-
-    def get_response_details(self, response: reqs.Response):
-        server_status = ""
-        server_message = ""
-        # A requests.Response is falsy for 4xx/5xx, which are the responses we need here
-        if response is not None:
-            try:
-                response_data = response.json()
-                _LOGGER.debug(response_data)
-                # Status we get back from server
-                server_status = response_data["Status"]
-                server_message = response_data["Message"]
-            except (KeyError, ValueError):
-                pass
-        return server_status, server_message
-
-
-    def make_api_call(
-        self, url: str, headers=None, data=None, do_retry=True, delay=5
-    ) -> reqs.Response:
+    async def make_api_call(self, url: str, headers=None, data=None, do_retry=True):
+        """Send a request to the mobile API and return its JSON body."""
         attempts = 2 if do_retry else 1
+        method = "POST" if data else "GET"
+        request_headers = {**self.headers, **(headers or {})}
 
         for attempt in range(attempts):
-            time.sleep(1)  # Wait 1 sec between requests to be graceful to the API.
-            current_headers = headers or self.headers.copy()
-            response = None
+            await asyncio.sleep(1)  # Wait 1 sec between requests to be graceful to the API.
+            status = None
+            body = None
+            _LOGGER.debug(
+                "Sending %s request to %s with headers: %s and data: %s",
+                method, url, request_headers, data,
+            )
 
             try:
-                if not data:
-                    _LOGGER.debug("Sending GET request to %s with headers: %s", url, current_headers)
-                    response = self.session.get(url, headers=current_headers, timeout=10)
-                else:
-                    _LOGGER.debug("Sending POST request to %s with headers: %s and data: %s", url, current_headers, data)
-                    response = self.session.post(url, headers=current_headers, json=data, timeout=10)
+                async with self.session.request(
+                    method, url, headers=request_headers, json=data, timeout=REQUEST_TIMEOUT
+                ) as response:
+                    status = response.status
+                    body = await response.text()
+                    response.raise_for_status()
 
-                response.raise_for_status()
+                    # Check for stealthy session expiration (HTML redirect)
+                    if "Account/Login" in str(response.url):
+                        raise ExpiredSessionError("Redirected to Account/Login")
 
-                # Check for stealthy session expiration (HTML redirect)
-                if "Account/Login" in response.url or (hasattr(response, "redirect_url") and response.redirect_url and "Account/Login" in str(response.redirect_url)):
-                    raise ExpiredSessionError("Redirected to Account/Login")
-
-                _LOGGER.debug(response)
-                return response
-
-            except (reqs.exceptions.RequestException, ExpiredSessionError) as exc:
-                is_auth_error = isinstance(exc, ExpiredSessionError) or (
-                    isinstance(exc, reqs.exceptions.RequestException)
-                    and response is not None
-                    and response.status_code in (401, 403)
-                )
+            except (aiohttp.ClientError, TimeoutError, ExpiredSessionError) as exc:
+                is_auth_error = isinstance(exc, ExpiredSessionError) or status in (401, 403)
 
                 if is_auth_error and attempt < attempts - 1:
                     _LOGGER.info("Session expired for %s. Re-authenticating...", url)
-                    self.api_login()
-                    time.sleep(delay)
+                    await self.api_login()
+                    await asyncio.sleep(RELOGIN_DELAY)
                     continue  # Loop back around and retry
 
                 # If we're out of retries or it's a completely different error:
-                server_status, server_message = self.get_response_details(response)
-                
+                server_status, server_message = _response_details(body)
+
                 # Log in with a fresh session next cycle. A failing optional endpoint
                 # (schedules, statistics) doesn't mean the session is broken.
                 if is_auth_error:
@@ -440,18 +306,14 @@ class WemPortalApi:
                     f"{DATA_GATHERING_ERROR} Request failed: {exc}. Server returned internal status code: {server_status} and message: {server_message}"
                 ) from exc
 
-        return response
+            _LOGGER.debug("Response %s from %s", status, url)
+            return json.loads(body) if body else None
 
-    def get_devices(self):
-        # Check if device data is already present
-        if self.data and self.modules:
-            _LOGGER.debug("Device data is already cached.")
-            return
-
+    async def get_devices(self):
         _LOGGER.debug("Fetching api device data")
         self.modules = {}
         self.data = {}
-        data = self.make_api_call(API_DEVICE_READ_URL, do_retry=True).json()
+        data = await self.make_api_call(API_DEVICE_READ_URL)
 
         for device in data["Devices"]:
             device_id_str = str(device["ID"])
@@ -464,18 +326,23 @@ class WemPortalApi:
                     "Name": module["Name"],
                 }
             self.data[device_id_str]["ConnectionStatus"] = device["ConnectionStatus"]
+            self.device_modules[device_id_str] = device["Modules"]
+            self.statistics_module_candidates[device_id_str] = [
+                module["Index"]
+                for module in device["Modules"]
+                if module["Type"] == STATISTICS_MODULE_TYPE
+            ]
 
-    def get_parameters(self):
+    async def get_parameters(self):
         assert self.modules is not None
         for device_id, device_data in self.data.items():
             if device_data["ConnectionStatus"] != 0:
                 continue
             _LOGGER.debug("Fetching api parameters data for device %s", device_id)
-            _LOGGER.debug(self.data)
-            _LOGGER.debug(self.modules[device_id])
+            _LOGGER.debug("Modules of device %s: %s", device_id, self.modules[device_id])
             delete_candidates = []
             forbidden_count = 0
-            for key, values in self.modules[device_id].items():
+            for values in self.modules[device_id].values():
                 # Check if parameters are already cached
                 if "parameters" in values and values["parameters"]:
                     _LOGGER.debug(
@@ -489,13 +356,13 @@ class WemPortalApi:
                     "ModuleType": values["Type"],
                 }
                 try:
-                    time.sleep(5)
-                    response = self.make_api_call(
+                    await asyncio.sleep(5)
+                    response = await self.make_api_call(
                         API_EVENT_TYPE_READ_URL, data=data, do_retry=False
                     )
                 except WemPortalError as exc:
-                    if isinstance(exc.__cause__, reqs.exceptions.HTTPError):
-                        status_code = exc.__cause__.response.status_code
+                    if isinstance(exc.__cause__, aiohttp.ClientResponseError):
+                        status_code = exc.__cause__.status
                         if status_code == 403:
                             forbidden_count += 1
                             if forbidden_count >= 3:
@@ -525,7 +392,7 @@ class WemPortalApi:
                     raise
                 parameters = {}
                 try:
-                    for parameter in response.json()["Parameters"]:
+                    for parameter in response["Parameters"]:
                         parameters[parameter["ParameterID"]] = parameter
                     if not parameters:
                         delete_candidates.append((values["Index"], values["Type"]))
@@ -544,14 +411,49 @@ class WemPortalApi:
             for key in delete_candidates:
                 del self.modules[device_id][key]
 
-    def change_value(
+    def _restore_parameters(self):
+        """Use the cached parameter definitions of devices whose modules didn't change."""
+        for device_id, device_modules in self.device_modules.items():
+            cached = self.parameter_cache.get(device_id)
+            if cached is None or cached["signature"] != _module_signature(device_modules):
+                continue
+            _LOGGER.debug("Using cached parameter definitions for device %s", device_id)
+            for key, parameters in cached["parameters"].items():
+                module_key = tuple(int(part) for part in key.split("-"))
+                if module_key not in self.modules[device_id]:
+                    continue
+                if parameters:
+                    self.modules[device_id][module_key]["parameters"] = parameters
+                else:
+                    # Modules without parameters are removed, as when they are fetched
+                    del self.modules[device_id][module_key]
+
+    def _update_parameter_cache(self):
+        """Remember the parameter definitions of every module that was resolved."""
+        for device_id, device_modules in self.device_modules.items():
+            # Parameters aren't fetched for offline devices, so keep what was cached
+            if self.data[device_id]["ConnectionStatus"] != 0:
+                continue
+            parameters = {}
+            for module in device_modules:
+                module_key = (module["Index"], module["Type"])
+                current = self.modules[device_id].get(module_key)
+                if current is None:
+                    parameters[f"{module_key[0]}-{module_key[1]}"] = {}
+                elif current.get("parameters"):
+                    parameters[f"{module_key[0]}-{module_key[1]}"] = current["parameters"]
+            cache = {"signature": _module_signature(device_modules), "parameters": parameters}
+            if self.parameter_cache.get(device_id) != cache:
+                self.parameter_cache[device_id] = cache
+                self.parameter_cache_changed = True
+
+    async def change_value(
         self,
         device_id,
         parameter_id,
         module_index,
         module_type,
         numeric_value,
-        login=True,
     ):
         """POST request to API to change a specific value"""
         _LOGGER.debug("Changing value for %s", parameter_id)
@@ -571,86 +473,50 @@ class WemPortalApi:
                 }
             ],
         }
-        # _LOGGER.info(data)
 
         try:
-            self.make_api_call(
-                API_DATA_ACCESS_WRITE_URL,
-                data=data,
-                do_retry=True
-            )
+            await self.make_api_call(API_DATA_ACCESS_WRITE_URL, data=data)
         except Exception as exc:
             raise ParameterChangeError(
                 f"Error changing parameter {parameter_id} value"
             ) from exc
 
     # Refresh data and retrieve new data
-    def get_data(self, enabled_devices=None):
+    async def get_data(self, enabled_devices=None, include_slow=True):
         _LOGGER.debug("Fetching fresh api data. enabled_devices=%s, self.data.keys()=%s", enabled_devices, list(self.data.keys()))
         target_devices = enabled_devices if enabled_devices else list(self.data.keys())
         _LOGGER.debug("Computed target_devices=%s", target_devices)
         now = time.time()
-        fetch_circuit_times = now - self.last_circuit_times_fetch >= SLOW_UPDATE_INTERVAL
+        fetch_circuit_times = (
+            include_slow and now - self.last_circuit_times_fetch >= SLOW_UPDATE_INTERVAL
+        )
         if fetch_circuit_times:
             self.last_circuit_times_fetch = now
         for device_id in target_devices:
-            _LOGGER.debug("Processing device_id=%s (type %s). Is in self.data? %s", device_id, type(device_id), str(device_id) in self.data)
-            if str(device_id) not in self.data:
+            if device_id not in self.data:
                 continue
-                
+
             # 1. Fetch Device Status First
             try:
-                status_response = self.make_api_call(
+                status_response = await self.make_api_call(
                     API_DEVICE_STATUS_READ_URL,
                     data={"DeviceID": int(device_id)},
-                    do_retry=True
-                ).json()
+                )
 
                 status_map = {0: "online", 7: "wrong_secret", 8: "busy", 50: "offline"}
                 conn_status = status_map.get(status_response.get("ConnectionStatus", -1), "unknown")
-
-                self.data[device_id][f"{device_id}-ConnectionStatus"] = {
-                    "friendlyName": "Connection Status",
-                    "ParameterID": "ConnectionStatus",
-                    "unit": None,
-                    "value": conn_status,
-                    "IsWriteable": False,
-                    "DataType": -1,
-                    "ModuleIndex": -1,
-                    "ModuleType": -1,
-                    "platform": "sensor",
-                    "icon": "mdi:network"
-                }
-
                 errors = status_response.get("Errors", [])
-                has_errors = "Yes" if errors else "No"
-                error_msg = ", ".join([str(e) for e in errors]) if errors else "None"
+                error_msg = ", ".join(str(e) for e in errors) if errors else "None"
 
-                self.data[device_id][f"{device_id}-HasErrors"] = {
-                    "friendlyName": "Has Errors",
-                    "ParameterID": "HasErrors",
-                    "unit": None,
-                    "value": has_errors,
-                    "IsWriteable": False,
-                    "DataType": -1,
-                    "ModuleIndex": -1,
-                    "ModuleType": -1,
-                    "platform": "sensor",
-                    "icon": "mdi:alert"
-                }
-
-                self.data[device_id][f"{device_id}-ErrorMessages"] = {
-                    "friendlyName": "Error Messages",
-                    "ParameterID": "ErrorMessages",
-                    "unit": None,
-                    "value": error_msg[:255],
-                    "IsWriteable": False,
-                    "DataType": -1,
-                    "ModuleIndex": -1,
-                    "ModuleType": -1,
-                    "platform": "sensor",
-                    "icon": "mdi:message-alert"
-                }
+                self.data[device_id][f"{device_id}-ConnectionStatus"] = _virtual_sensor(
+                    "Connection Status", "ConnectionStatus", conn_status, "mdi:network"
+                )
+                self.data[device_id][f"{device_id}-HasErrors"] = _virtual_sensor(
+                    "Has Errors", "HasErrors", "Yes" if errors else "No", "mdi:alert"
+                )
+                self.data[device_id][f"{device_id}-ErrorMessages"] = _virtual_sensor(
+                    "Error Messages", "ErrorMessages", error_msg[:255], "mdi:message-alert"
+                )
 
                 self._log_request_success(f"device status (device {device_id})")
 
@@ -683,17 +549,15 @@ class WemPortalApi:
                 raise WemPortalError(DATA_GATHERING_ERROR) from exc
 
             try:
-                self.make_api_call(
+                await self.make_api_call(
                     API_REFRESH_URL,
                     data=data,
                 )
-                time.sleep(5)
-                values = self.make_api_call(
+                await asyncio.sleep(5)
+                values = await self.make_api_call(
                     API_DATA_ACCESS_READ_URL,
                     data=data,
-                    do_retry=True
-                ).json()
-                from .mapper import WemPortalDataMapper
+                )
                 WemPortalDataMapper.process_api_values(
                     device_id=device_id,
                     values_json=values,
@@ -712,85 +576,67 @@ class WemPortalApi:
 
             # 3. Fetch Heating Schedules (Rate limited)
             if fetch_circuit_times:
-                self.get_circuit_times(device_id)
+                await self.get_circuit_times(device_id)
 
         # 4. Fetch Energy Statistics (Rate limited)
-        self.get_statistics(enabled_devices)
+        if include_slow:
+            await self.get_statistics(enabled_devices)
 
-    def get_circuit_times(self, device_id):
+    async def get_circuit_times(self, device_id):
         """Fetch the heating schedules (DataType == 6) of a device."""
-        try:
-            for module in self.modules[device_id].values():
-                module_index = module.get("Index")
-                module_type = module.get("Type")
-                if "parameters" in module:
-                    for param_id, param_data in module["parameters"].items():
-                        if param_data.get("DataType") == 6:  # WemDataType.PROGRAM
-                            request = f"CircuitTimes for {param_id} (device {device_id})"
-                            try:
-                                refresh_payload = {
-                                    "DeviceID": int(device_id),
-                                    "ModuleIndex": module_index,
-                                    "ModuleType": module_type,
-                                    "ParameterID": param_id
-                                }
+        programs = [
+            (module, param_id)
+            for module in self.modules[device_id].values()
+            for param_id, param_data in module.get("parameters", {}).items()
+            if param_data.get("DataType") == 6  # WemDataType.PROGRAM
+        ]
+        for module, param_id in programs:
+            request = f"CircuitTimes for {param_id} (device {device_id})"
+            payload = {
+                "DeviceID": int(device_id),
+                "ModuleIndex": module["Index"],
+                "ModuleType": module["Type"],
+                "ParameterID": param_id,
+            }
+            try:
+                job_id = (
+                    await self.make_api_call(API_CIRCUIT_TIMES_REFRESH_URL, data=payload)
+                ).get("JobID")
+                if job_id is None:
+                    continue
 
-                                job_resp = self.make_api_call(
-                                    API_CIRCUIT_TIMES_REFRESH_URL,
-                                    data=refresh_payload,
-                                    do_retry=True
-                                ).json()
+                await asyncio.sleep(2)  # Give backend time to build the schedule payload
+                schedule_resp = await self.make_api_call(
+                    API_CIRCUIT_TIMES_READ_URL,
+                    data={**payload, "JobID": job_id},
+                )
+            except Exception as exc:
+                self._log_request_failure(request, exc)
+                continue
 
-                                job_id = job_resp.get("JobID")
-                                if job_id is None:
-                                    continue
+            self._log_request_success(request)
+            sensor = self.data[device_id].setdefault(
+                f"{module['Name']}-{param_id}",
+                {
+                    "friendlyName": translate(self.language, friendly_name_mapper(param_id)),
+                    "ParameterID": param_id,
+                    "unit": None,
+                    "IsWriteable": False,
+                    "DataType": 6,
+                    "ModuleIndex": module["Index"],
+                    "ModuleType": module["Type"],
+                    "platform": "sensor",
+                    "icon": "mdi:calendar-clock",
+                },
+            )
+            sensor["CircuitTimesDay"] = schedule_resp.get("CircuitTimesDay", [])
+            sensor["PossibleValues"] = schedule_resp.get("PossibleValues", [])
+            sensor["value"] = "Active"
 
-                                time.sleep(2)  # Give backend time to build the schedule payload
-
-                                read_payload = {
-                                    "DeviceID": int(device_id),
-                                    "JobID": job_id,
-                                    "ModuleIndex": module_index,
-                                    "ModuleType": module_type,
-                                    "ParameterID": param_id
-                                }
-
-                                schedule_resp = self.make_api_call(
-                                    API_CIRCUIT_TIMES_READ_URL,
-                                    data=read_payload,
-                                    do_retry=True
-                                ).json()
-
-                                sensor_name = f"{module['Name']}-{param_id}"
-                                if sensor_name not in self.data[device_id]:
-                                    from .translations import friendly_name_mapper, translate
-                                    self.data[device_id][sensor_name] = {
-                                        "friendlyName": translate(self.language, friendly_name_mapper(param_id)),
-                                        "ParameterID": param_id,
-                                        "unit": None,
-                                        "value": "Active",
-                                        "IsWriteable": False,
-                                        "DataType": 6,
-                                        "ModuleIndex": module_index,
-                                        "ModuleType": module_type,
-                                        "platform": "sensor",
-                                        "icon": "mdi:calendar-clock",
-                                    }
-
-                                self.data[device_id][sensor_name]["CircuitTimesDay"] = schedule_resp.get("CircuitTimesDay", [])
-                                self.data[device_id][sensor_name]["PossibleValues"] = schedule_resp.get("PossibleValues", [])
-                                self.data[device_id][sensor_name]["value"] = "Active"
-                                self._log_request_success(request)
-
-                            except Exception as exc:
-                                self._log_request_failure(request, exc)
-        except Exception as exc:
-            self._log_request_failure(f"CircuitTimes (device {device_id})", exc)
-
-    def get_statistics(self, enabled_devices=None):
+    async def get_statistics(self, enabled_devices=None):
         """Fetch historical statistics from the API, rate limited to once per hour."""
         now = time.time()
-        if self.last_statistics_fetch is not None and (now - self.last_statistics_fetch) < SLOW_UPDATE_INTERVAL:
+        if now - self.last_statistics_fetch < SLOW_UPDATE_INTERVAL:
             return
             
         self.last_statistics_fetch = now
@@ -801,88 +647,96 @@ class WemPortalApi:
             if device_id not in self.data:
                 continue
             try:
-                refresh_resp = self.make_api_call(
+                refresh_resp = await self.make_api_call(
                     API_STATISTICS_REFRESH_URL,
                     data={"DeviceID": int(device_id)},
-                    do_retry=True
-                ).json()
-                
+                )
+                _LOGGER.debug("Statistics refresh response for device %s: %s", device_id, refresh_resp)
+
                 group_types = refresh_resp.get("GroupTypeDescriptions", [])
-                headers = {"X-Api-Version": "2.0.0.0"}
-                
+                if not group_types:
+                    continue
+                module_index = await self._find_statistics_module(device_id, group_types[0].get("GroupType"))
+                if module_index is None:
+                    self._log_request_failure(
+                        f"Statistics (device {device_id})",
+                        WemPortalError("No device module returned statistics"),
+                    )
+                    continue
+
                 for group in group_types:
                     group_id = group.get("GroupType")
                     group_name = group.get("Description")
-                    if not group_name or group_name.strip() == "":
-                        fallback_names = {
-                            1: "Heating Energy Yield",
-                            2: "Hot Water Energy Yield",
-                            3: "Cooling Energy Yield",
-                            4: "Total Energy Yield",
-                            5: "Power Consumption Heating",
-                            6: "Power Consumption Hot Water",
-                            7: "Power Consumption Cooling",
-                            8: "Total Power Consumption"
-                        }
-                        group_name = fallback_names.get(group_id, f"Energy {group_id}")
+                    if not group_name or not group_name.strip():
+                        group_name = STATISTICS_FALLBACK_NAMES.get(group_id, f"Energy {group_id}")
                     else:
-                        from .translations import translate
                         translated_group = translate(self.language, group_name)
                         if "energy" not in translated_group.lower():
                             group_name = f"{translated_group} Energy"
                         else:
                             group_name = translated_group
                     
-                    read_payload = {
-                        "DeviceID": int(device_id),
-                        "ModuleType": 7,
-                        "ModuleIndex": 0,
-                        "GroupType": group_id,
-                        "Type": 1
-                    }
                     request = f"Statistics for group {group_id} (device {device_id})"
 
                     try:
-                        time.sleep(2)  # Avoid hammering the API
-                        stats_resp = self.make_api_call(
-                            API_STATISTICS_READ_URL,
-                            headers=headers,
-                            data=read_payload,
-                            do_retry=True
-                        ).json()
+                        stats_resp = await self._read_statistics(device_id, module_index, group_id)
                         
                         self._log_request_success(request)
+                        self.statistics_groups.setdefault(device_id, set()).add(group_id)
                         values = stats_resp.get("Values", [])
                         if not values:
                             continue
-                            
-                        # The last value in the array is the current day's consumption
-                        latest_stat = values[-1]
-                        current_value = latest_stat.get("Value", 0.0)
-                        unit = stats_resp.get("Unit", "kWh")
-                        
+
+                        # The last entry is this year's running total
                         sensor_name = f"Energy_{group_id}"
-                        
-                        self.data[device_id][f"{device_id}-{sensor_name}"] = {
-                            "friendlyName": group_name,
-                            "ParameterID": sensor_name,
-                            "unit": unit,
-                            "value": current_value,
-                            "IsWriteable": False,
-                            "DataType": -1,
-                            "ModuleIndex": -1,
-                            "ModuleType": -1,
-                            "platform": "sensor",
-                            "icon": "mdi:lightning-bolt",
-                            "device_class": "energy",
-                            "state_class": "total_increasing"
-                        }
-                        
+                        self.data[device_id][f"{device_id}-{sensor_name}"] = _virtual_sensor(
+                            group_name,
+                            sensor_name,
+                            values[-1].get("Value", 0.0),
+                            "mdi:lightning-bolt",
+                            unit=stats_resp.get("Unit", "kWh"),
+                            device_class="energy",
+                            state_class="total_increasing",
+                        )
+
                     except Exception as exc:
-                        self._log_request_failure(request, exc)
+                        if group_id in self.statistics_groups.get(device_id, set()):
+                            self._log_request_failure(request, exc)
+                        else:
+                            _LOGGER.debug("Failed to fetch %s: %s", request, exc)
 
             except Exception as exc:
                 self._log_request_failure(f"Statistics (device {device_id})", exc)
+
+    async def _read_statistics(self, device_id, module_index, group_id):
+        """Read the yearly statistics of a group from a device module."""
+        await asyncio.sleep(2)  # Avoid hammering the API
+        return await self.make_api_call(
+            API_STATISTICS_READ_URL,
+            headers={"X-Api-Version": "2.0.0.0"},
+            data={
+                "DeviceID": int(device_id),
+                "ModuleType": STATISTICS_MODULE_TYPE,
+                "ModuleIndex": module_index,
+                "GroupType": group_id,
+                # Yearly range: day and month lists end in placeholders for periods that aren't over
+                "Type": 3,
+            },
+        )
+
+    async def _find_statistics_module(self, device_id, group_id):
+        """Return the index of the device module that has the statistics, if any."""
+        # Which device module has them differs per installation, so try each once
+        if device_id not in self.statistics_modules:
+            for module_index in self.statistics_module_candidates.get(device_id, []):
+                try:
+                    await self._read_statistics(device_id, module_index, group_id)
+                except WemPortalError as exc:
+                    _LOGGER.debug("Device module %s has no statistics: %s", module_index, exc)
+                    continue
+                self.statistics_modules[device_id] = module_index
+                break
+        return self.statistics_modules.get(device_id)
 
     def _log_request_failure(self, request: str, exc: Exception) -> None:
         """Log a failed request as a warning once, then as debug while it keeps failing."""
