@@ -27,6 +27,9 @@ def _parse_value(raw_value: str, name: str) -> tuple[float | str | None, str | N
         value, unit = 0.0, None
     elif lowered in BOOLEAN_ON_STRINGS:
         value, unit = 1.0, None
+    elif lowered == "--" and "soll" in name:
+        # Setpoint is "--" by design in regenerative mode, not a missing sensor
+        value, unit = 0.0, None
     elif lowered in MISSING_DATA_STRINGS:
         value, unit = None, None
     elif not number.strip("-"):
