@@ -367,3 +367,90 @@ def test_fetch_data_web_mode() -> None:
     assert list(data) == ["0000"]
     assert list(data["0000"]) == ["system-temp"]
     assert data["0000"]["system-temp"]["value"] == 12.5
+
+
+DEVICES = {
+    "Devices": [
+        {
+            "ID": 1234,
+            "ConnectionStatus": 0,
+            "Modules": [
+                {"Index": 0, "Type": 9, "Name": "Gerät 0", "FWUVersion": "A.FWU"},
+                {"Index": 0, "Type": 2, "Name": "HZK0", "FWUVersion": ""},
+            ],
+        }
+    ]
+}
+PARAMETERS = {"Komfort": {"ParameterID": "Komfort", "DataType": 3}}
+CACHE = {
+    "1234": {
+        "signature": ["0-2-", "0-9-A.FWU"],
+        "parameters": {"0-9": {}, "0-2": PARAMETERS},
+    }
+}
+
+
+def test_fetch_data_uses_parameter_cache() -> None:
+    """Test cached parameter definitions are used instead of fetching them."""
+    api = WemPortalApi("test", "test", parameter_cache=CACHE)
+
+    with (
+        patch.object(api, "api_login"),
+        patch.object(api, "make_api_call", return_value=_json(DEVICES)) as mock_call,
+        patch.object(api, "get_data"),
+    ):
+        api.fetch_data()
+
+    assert mock_call.call_count == 1
+    assert api.modules["1234"] == {
+        (0, 2): {"Index": 0, "Type": 2, "Name": "HZK0", "parameters": PARAMETERS}
+    }
+    assert api.parameter_cache == CACHE
+    assert not api.parameter_cache_changed
+
+
+def test_fetch_data_refreshes_outdated_parameter_cache() -> None:
+    """Test the parameter definitions are fetched again after a firmware update."""
+    api = WemPortalApi(
+        "test", "test", parameter_cache={"1234": {**CACHE["1234"], "signature": ["0-2-", "0-9-OLD.FWU"]}}
+    )
+
+    with (
+        patch.object(api, "api_login"),
+        patch.object(
+            api,
+            "make_api_call",
+            side_effect=[
+                _json(DEVICES),
+                _json({"Parameters": []}),
+                _json({"Parameters": list(PARAMETERS.values())}),
+            ],
+        ) as mock_call,
+        patch.object(api, "get_data"),
+        patch("custom_components.wemportal.wemportalapi.time.sleep"),
+    ):
+        api.fetch_data()
+
+    assert mock_call.call_count == 3
+    assert api.parameter_cache == CACHE
+    assert api.parameter_cache_changed
+
+
+def test_get_data_without_slow_data(api: WemPortalApi) -> None:
+    """Test schedules and statistics can be left out."""
+    api.data = {"1234": {}}
+    api.modules = {"1234": {}}
+
+    with (
+        patch.object(
+            api, "make_api_call", return_value=_json({"ConnectionStatus": 0, "Modules": []})
+        ),
+        patch.object(api, "get_circuit_times") as mock_circuit_times,
+        patch.object(api, "get_statistics") as mock_statistics,
+    ):
+        api.get_data(include_slow=False)
+
+    mock_circuit_times.assert_not_called()
+    mock_statistics.assert_not_called()
+    # Not fetching them now must not postpone the next fetch
+    assert api.last_circuit_times_fetch == 0.0

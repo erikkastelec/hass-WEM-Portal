@@ -43,10 +43,12 @@ def mock_config_entry() -> MockConfigEntry:
 def mock_wemportal_api() -> Generator[MagicMock]:
     """Return a mocked WEM Portal API."""
     with patch(
-        "custom_components.wemportal.WemPortalApi", autospec=True
+        "custom_components.wemportal.coordinator.WemPortalApi", autospec=True
     ) as mock_api_class:
         api = mock_api_class.return_value
         api.data = {}
         api.api_version = "1.2.3"
+        api.parameter_cache = {}
+        api.parameter_cache_changed = False
         api.fetch_data.return_value = load_json_object_fixture("api_data.json")
         yield api

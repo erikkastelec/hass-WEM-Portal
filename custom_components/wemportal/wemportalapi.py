@@ -76,13 +76,28 @@ def _virtual_sensor(friendly_name, parameter_id, value, icon, unit=None, **extra
     }
 
 
+def _module_signature(device_modules):
+    """Return what identifies the modules of a device, including their firmware."""
+    return sorted(
+        f"{module['Index']}-{module['Type']}-{module.get('FWUVersion', '')}"
+        for module in device_modules
+    )
+
+
 class WemPortalApi:
     """Wrapper class for Weishaupt WEM Portal"""
 
-    def __init__(self, username, password, config=None, existing_data=None) -> None:
+    def __init__(
+        self, username, password, config=None, existing_data=None, parameter_cache=None
+    ) -> None:
         if config is None:
             config = {}
         self.data = copy.deepcopy(existing_data) if existing_data else {}
+        # Parameter definitions per device, saved to disk as fetching them takes about 6 s per module
+        self.parameter_cache = copy.deepcopy(parameter_cache) if parameter_cache else {}
+        # Set when the parameter cache needs saving
+        self.parameter_cache_changed = False
+        self.device_modules: dict[str, list[dict]] = {}
         self.username = username
         self.password = password
         self.mode = config.get(CONF_MODE, DEFAULT_CONF_MODE_VALUE)
@@ -111,7 +126,8 @@ class WemPortalApi:
         self.failing_requests: set[str] = set()
         self.api_version = None
 
-    def fetch_data(self, enabled_devices=None):
+    def fetch_data(self, enabled_devices=None, include_slow=True):
+        """Fetch the data, where include_slow also fetches schedules and statistics."""
         try:
             if self.mode != "web":
                 # Login and get device info
@@ -120,7 +136,9 @@ class WemPortalApi:
                 # Fetch device and parameter data only at start, or recover missing metadata
                 if self.modules is None:
                     self.get_devices()
+                    self._restore_parameters()
                     self.get_parameters()
+                    self._update_parameter_cache()
                 elif any(
                     "parameters" not in module
                     for modules in self.modules.values()
@@ -132,7 +150,7 @@ class WemPortalApi:
             if self.mode == "web":
                 self._merge_webscraping_data(next(iter(self.data), "0000"), self.fetch_webscraping_data())
             elif self.mode == "api":
-                self.get_data(enabled_devices)
+                self.get_data(enabled_devices, include_slow)
             else:
                 # Scrape once per scan interval, with 10 s of slack for the poll timing
                 if (
@@ -147,7 +165,7 @@ class WemPortalApi:
                         _LOGGER.warning("Web scraper failed this cycle. Falling back to API only. Error: %s", exc)
 
                 # The API always runs as a resilient fallback
-                self.get_data(enabled_devices)
+                self.get_data(enabled_devices, include_slow)
 
             return self.data
 
@@ -391,6 +409,7 @@ class WemPortalApi:
                     "Name": module["Name"],
                 }
             self.data[device_id_str]["ConnectionStatus"] = device["ConnectionStatus"]
+            self.device_modules[device_id_str] = device["Modules"]
             self.statistics_module_candidates[device_id_str] = [
                 module["Index"]
                 for module in device["Modules"]
@@ -475,6 +494,42 @@ class WemPortalApi:
             for key in delete_candidates:
                 del self.modules[device_id][key]
 
+    def _restore_parameters(self):
+        """Use the cached parameter definitions of devices whose modules didn't change."""
+        for device_id, device_modules in self.device_modules.items():
+            cached = self.parameter_cache.get(device_id)
+            if cached is None or cached["signature"] != _module_signature(device_modules):
+                continue
+            _LOGGER.debug("Using cached parameter definitions for device %s", device_id)
+            for key, parameters in cached["parameters"].items():
+                module_key = tuple(int(part) for part in key.split("-"))
+                if module_key not in self.modules[device_id]:
+                    continue
+                if parameters:
+                    self.modules[device_id][module_key]["parameters"] = parameters
+                else:
+                    # Modules without parameters are removed, as when they are fetched
+                    del self.modules[device_id][module_key]
+
+    def _update_parameter_cache(self):
+        """Remember the parameter definitions of every module that was resolved."""
+        for device_id, device_modules in self.device_modules.items():
+            # Parameters aren't fetched for offline devices, so keep what was cached
+            if self.data[device_id]["ConnectionStatus"] != 0:
+                continue
+            parameters = {}
+            for module in device_modules:
+                module_key = (module["Index"], module["Type"])
+                current = self.modules[device_id].get(module_key)
+                if current is None:
+                    parameters[f"{module_key[0]}-{module_key[1]}"] = {}
+                elif current.get("parameters"):
+                    parameters[f"{module_key[0]}-{module_key[1]}"] = current["parameters"]
+            cache = {"signature": _module_signature(device_modules), "parameters": parameters}
+            if self.parameter_cache.get(device_id) != cache:
+                self.parameter_cache[device_id] = cache
+                self.parameter_cache_changed = True
+
     def change_value(
         self,
         device_id,
@@ -514,12 +569,14 @@ class WemPortalApi:
             ) from exc
 
     # Refresh data and retrieve new data
-    def get_data(self, enabled_devices=None):
+    def get_data(self, enabled_devices=None, include_slow=True):
         _LOGGER.debug("Fetching fresh api data. enabled_devices=%s, self.data.keys()=%s", enabled_devices, list(self.data.keys()))
         target_devices = enabled_devices if enabled_devices else list(self.data.keys())
         _LOGGER.debug("Computed target_devices=%s", target_devices)
         now = time.time()
-        fetch_circuit_times = now - self.last_circuit_times_fetch >= SLOW_UPDATE_INTERVAL
+        fetch_circuit_times = (
+            include_slow and now - self.last_circuit_times_fetch >= SLOW_UPDATE_INTERVAL
+        )
         if fetch_circuit_times:
             self.last_circuit_times_fetch = now
         for device_id in target_devices:
@@ -611,7 +668,8 @@ class WemPortalApi:
                 self.get_circuit_times(device_id)
 
         # 4. Fetch Energy Statistics (Rate limited)
-        self.get_statistics(enabled_devices)
+        if include_slow:
+            self.get_statistics(enabled_devices)
 
     def get_circuit_times(self, device_id):
         """Fetch the heating schedules (DataType == 6) of a device."""
