@@ -5,23 +5,23 @@ Switch platform for wemportal component
 from typing import override
 
 from homeassistant.components.switch import SwitchEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import _LOGGER, DOMAIN
+from .const import _LOGGER
+from .coordinator import WemPortalConfigEntry
 from .entity import WemPortalWritableEntity
 from .utils import fix_value_and_uom
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: WemPortalConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Switch entry setup."""
 
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
+    coordinator = config_entry.runtime_data.coordinator
     entities: list[WemPortalSwitch] = []
     for device_id, entity_data in coordinator.data.items():
         for unique_id, values in entity_data.items():
@@ -43,7 +43,7 @@ class WemPortalSwitch(WemPortalWritableEntity, SwitchEntity):
     def __init__(
         self,
         coordinator,
-        config_entry: ConfigEntry,
+        config_entry: WemPortalConfigEntry,
         device_id,
         _unique_id,
         entity_data,

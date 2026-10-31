@@ -2,17 +2,22 @@
 from datetime import timedelta
 from unittest.mock import MagicMock, call
 
+import pytest
 from freezegun.api import FrozenDateTimeFactory
-from homeassistant.const import STATE_UNAVAILABLE
+from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
     load_json_object_fixture,
 )
 
-from custom_components.wemportal.const import DEFAULT_CONF_SCAN_INTERVAL_API_VALUE, DOMAIN
+from custom_components.wemportal.const import (
+    DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
+    DOMAIN,
+)
 from custom_components.wemportal.exceptions import AuthError, WemPortalError
 
 DEVICE_ID = "1234"
@@ -141,3 +146,41 @@ async def test_disabled_devices_not_fetched(
     await hass.async_block_till_done()
 
     assert mock_wemportal_api.fetch_data.call_args_list == [call([DEVICE_ID], False)]
+
+
+@pytest.mark.parametrize(
+    ("options", "interval"),
+    [
+        pytest.param({}, 300, id="default"),
+        pytest.param({"mode": "api", "api_scan_interval": 120}, 120, id="api"),
+        pytest.param({"mode": "web", "scan_interval": 900}, 900, id="web"),
+        pytest.param(
+            {"mode": "both", "scan_interval": 900, "api_scan_interval": 120},
+            120,
+            id="both",
+        ),
+    ],
+)
+async def test_update_interval_per_mode(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    mock_wemportal_api: MagicMock,
+    options: dict[str, str | int],
+    interval: int,
+) -> None:
+    """Test the update interval follows the mode and its scan interval."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={CONF_USERNAME: "user", CONF_PASSWORD: "pass"},
+        options=options,
+    )
+    await _setup(hass, entry)
+    await _tick(hass, freezer, timedelta(seconds=1))
+
+    # HA adds up to a second of jitter to the schedule, so check with some margin
+    await _tick(hass, freezer, timedelta(seconds=interval - 2))
+    assert mock_wemportal_api.fetch_data.call_count == 2
+
+    await _tick(hass, freezer, timedelta(seconds=4))
+    assert mock_wemportal_api.fetch_data.call_count == 3

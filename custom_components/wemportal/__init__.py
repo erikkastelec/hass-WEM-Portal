@@ -5,36 +5,27 @@ Author: erikkastelec
 https://github.com/erikkastelec/hass-WEM-Portal
 
 """
-from datetime import timedelta
-
 import homeassistant.helpers.entity_registry as entity_registry
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as device_registry
-from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     _LOGGER,
-    CONF_MODE,
-    CONF_SCAN_INTERVAL_API,
-    DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
-    DEFAULT_CONF_SCAN_INTERVAL_VALUE,
     DOMAIN,
     PLATFORMS,
 )
-from .coordinator import WemPortalDataUpdateCoordinator, parameter_store
+from .coordinator import (
+    WemPortalConfigEntry,
+    WemPortalData,
+    WemPortalDataUpdateCoordinator,
+    parameter_store,
+)
 
 
 def get_wemportal_unique_id(config_entry_id: str, device_id: str, name: str):
     """Return unique ID for WEM Portal."""
     return f"{config_entry_id}:{device_id}:{name}"
-
-
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the wemportal component."""
-    hass.data.setdefault(DOMAIN, {})
-    return True
 
 
 # Migrate values from previous versions
@@ -104,26 +95,8 @@ async def migrate_unique_ids(
         await coordinator.async_refresh()
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: WemPortalConfigEntry) -> bool:
     """Set up the wemportal component."""
-    # Set proper update_interval, based on selected mode
-    if entry.options.get(CONF_MODE) == "web":
-        update_interval = entry.options.get(
-            CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE
-        )
-
-    elif entry.options.get(CONF_MODE) == "api":
-        update_interval = entry.options.get(
-            CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
-        )
-    else:
-        update_interval = min(
-            entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE),
-            entry.options.get(
-                CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
-            ),
-        )
-
     dr = device_registry.async_get(hass)
     devices = device_registry.async_entries_for_config_entry(dr, entry.entry_id)
     device_ids = [device.name for device in devices]
@@ -132,9 +105,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         _LOGGER.info("Found devices for %s: %s", DOMAIN, device_ids)
 
-    coordinator = WemPortalDataUpdateCoordinator(
-        hass, entry, timedelta(seconds=update_interval)
-    )
+    coordinator = WemPortalDataUpdateCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
     # Is there an on_update function that we can add listener to?
@@ -150,12 +121,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         model="WEM Portal",
     )
 
-    hass.data[DOMAIN][entry.entry_id] = {
-        "api": coordinator.api,
-        # "config": entry.data,
-        "coordinator": coordinator,
-        "hub_device_id": hub_device.id,
-    }
+    entry.runtime_data = WemPortalData(coordinator, hub_device.id)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_entry_updated))
@@ -170,12 +136,10 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
     return True
 
 
-async def _async_entry_updated(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+async def _async_entry_updated(hass: HomeAssistant, config_entry: WemPortalConfigEntry) -> None:
     """Handle entry updates."""
     _LOGGER.info("Migrating entity names for wemportal because of config entry update")
-    await migrate_unique_ids(
-        hass, config_entry, hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
-    )
+    await migrate_unique_ids(hass, config_entry, config_entry.runtime_data.coordinator)
     await hass.config_entries.async_reload(config_entry.entry_id)
 
 
@@ -184,12 +148,6 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await parameter_store(hass, entry).async_remove()
 
 
-async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, config_entry: WemPortalConfigEntry) -> bool:
     """Handle removal of an entry."""
-    unload_ok = bool(
-        await hass.config_entries.async_unload_platforms(config_entry, PLATFORMS)
-    )
-    if unload_ok:
-        hass.data[DOMAIN].pop(config_entry.entry_id)
-
-    return unload_ok
+    return await hass.config_entries.async_unload_platforms(config_entry, PLATFORMS)

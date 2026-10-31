@@ -1,13 +1,14 @@
 """ WemPortal integration coordinator """
 from __future__ import annotations
-import asyncio
-from datetime import timedelta
 
+import asyncio
+from dataclasses import dataclass
+from datetime import timedelta
 from time import monotonic
 from typing import override
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
+from homeassistant.const import CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers import device_registry as dr
@@ -19,13 +20,26 @@ from homeassistant.helpers.update_coordinator import (
 
 from .const import (
     _LOGGER,
+    CONF_MODE,
+    CONF_SCAN_INTERVAL_API,
     DEFAULT_CONF_SCAN_INTERVAL_API_VALUE,
+    DEFAULT_CONF_SCAN_INTERVAL_VALUE,
     DEFAULT_TIMEOUT,
     DOMAIN,
     STORAGE_VERSION,
 )
 from .exceptions import AuthError, ForbiddenError, WemPortalError
 from .wemportalapi import WemPortalApi
+
+type WemPortalConfigEntry = ConfigEntry[WemPortalData]
+
+
+@dataclass
+class WemPortalData:
+    """Runtime data of a WEM Portal config entry."""
+
+    coordinator: WemPortalDataUpdateCoordinator
+    hub_device_id: str
 
 
 def parameter_store(hass: HomeAssistant, entry: ConfigEntry) -> Store:
@@ -41,20 +55,29 @@ class WemPortalDataUpdateCoordinator(DataUpdateCoordinator):
     def __init__(
         self,
         hass: HomeAssistant,
-        config_entry: ConfigEntry,
-        update_interval,
+        config_entry: WemPortalConfigEntry,
     ) -> None:
         """Initialize DataUpdateCoordinator for the wemportal component"""
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=config_entry,
             name="WemPortal update",
             # The first refresh leaves out schedules and statistics, so the next one follows right away
             update_interval=timedelta(seconds=1),
         )
-        self.regular_update_interval = update_interval
-        self.hass = hass
-        self.config_entry = config_entry
+        web_interval = config_entry.options.get(
+            CONF_SCAN_INTERVAL, DEFAULT_CONF_SCAN_INTERVAL_VALUE
+        )
+        api_interval = config_entry.options.get(
+            CONF_SCAN_INTERVAL_API, DEFAULT_CONF_SCAN_INTERVAL_API_VALUE
+        )
+        # In "both" mode the API is polled every time and the scraping limits itself
+        self.regular_update_interval = timedelta(
+            seconds={"web": web_interval, "api": api_interval}.get(
+                config_entry.options.get(CONF_MODE), min(web_interval, api_interval)
+            )
+        )
         self._store = parameter_store(hass, config_entry)
         self.last_try = None
         self.num_failed = 0
