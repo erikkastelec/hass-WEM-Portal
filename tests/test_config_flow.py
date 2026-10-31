@@ -58,7 +58,7 @@ async def test_form_invalid_auth(hass):
         "custom_components.wemportal.wemportalapi.WemPortalApi.api_login",
         side_effect=AuthError,
     ), patch(
-        "custom_components.wemportal.wemportalapi.WemPortalApi.web_login",
+        "custom_components.wemportal.config_flow.WemPortalScraper.login",
         side_effect=AuthError,
     ):
         result2 = await hass.config_entries.flow.async_configure(

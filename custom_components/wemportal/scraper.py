@@ -1,7 +1,8 @@
 """Web scraping scraper for WEM Portal using curl_cffi."""
 
+import asyncio
 import logging
-import time
+
 from curl_cffi import requests
 from lxml import html
 
@@ -50,17 +51,26 @@ def _parse_value(raw_value: str, name: str) -> tuple[float | str | None, str | N
 class WemPortalScraper:
     """Scraper for navigating and extracting data from WEM Portal using curl_cffi."""
 
-    def __init__(self, username, password, cookie=None):
+    def __init__(self, username, password):
         self.username = username
         self.password = password
-        self.cookie = cookie if cookie else {}
-        self.session = requests.Session(impersonate="chrome110")
-        
-    def scrape(self):
+
+    async def login(self):
+        """Log in to check the credentials."""
+        async with requests.AsyncSession(impersonate="chrome110") as session:
+            await self._login(session)
+
+    async def scrape(self):
         """Perform the scraping process and return the extracted data."""
+        async with requests.AsyncSession(impersonate="chrome110") as session:
+            await self._login(session)
+            return await self._scrape_expert_page(session)
+
+    async def _login(self, session):
+        """Log in to the web portal with a browser-like session."""
         # 1. GET Login page
         try:
-            r1 = self.session.get(WEB_LOGIN_URL)
+            r1 = await session.get(WEB_LOGIN_URL)
             if r1.status_code != 200:
                 raise AuthError(f"Authentication Error: Received {r1.status_code} on login page.")
         except Exception as e:
@@ -85,7 +95,7 @@ class WemPortalScraper:
             "ctl00$content$btnLogin": "Anmelden",
         }
         
-        r2 = self.session.post(WEB_LOGIN_URL, data=login_data, allow_redirects=True)
+        r2 = await session.post(WEB_LOGIN_URL, data=login_data, allow_redirects=True)
         if r2.status_code != 200:
             raise AuthError(f"Authentication Error: Encountered error after login. Received {r2.status_code}.")
 
@@ -93,11 +103,13 @@ class WemPortalScraper:
         if "AspxAutoDetectCookieSupport" in r2.url or WEB_LOGIN_URL.lower() in r2.url.lower():
             raise AuthError(f"Authentication Error: Login failed or cookies not detected. URL: {r2.url}")
 
+    async def _scrape_expert_page(self, session):
+        """Open the expert page and return the extracted data."""
         # Wait a moment
-        time.sleep(2)
-        
+        await asyncio.sleep(2)
+
         # 3. GET Default.aspx
-        r_main = self.session.get(WEB_MAIN_URL)
+        r_main = await session.get(WEB_MAIN_URL)
         tree_main = html.fromstring(r_main.text)
         
         viewstate_main_elem = tree_main.xpath("//*[@id='__VIEWSTATE']/@value")
@@ -118,7 +130,7 @@ class WemPortalScraper:
         }
 
         # 4. POST to select 'Expert' tab
-        r_expert = self.session.post(WEB_MAIN_URL, data=form_data, allow_redirects=True)
+        r_expert = await session.post(WEB_MAIN_URL, data=form_data, allow_redirects=True)
         
         # 5. Extract data
         return self.parse_expert_page(r_expert.text)
@@ -163,7 +175,4 @@ class WemPortalScraper:
                     "ParameterID": name,
                 }
 
-        # Save cookies for next run (extracted from requests Session)
-        cookies_dict = dict(self.session.cookies)
-        output["cookie"] = cookies_dict
         return [output]
