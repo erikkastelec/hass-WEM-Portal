@@ -5,7 +5,12 @@ import pytest
 from homeassistant import config_entries
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD
 
-from custom_components.wemportal.const import DOMAIN, CONF_MODE
+from custom_components.wemportal.const import (
+    CONF_LANGUAGE,
+    CONF_MODE,
+    DEFAULT_CONF_LANGUAGE_VALUE,
+    DOMAIN,
+)
 from custom_components.wemportal.exceptions import AuthError
 
 
@@ -44,6 +49,7 @@ async def test_form_successful_setup(hass):
     assert result2["data"] == {
         CONF_USERNAME: "test-username",
         CONF_PASSWORD: "test-password",
+        CONF_LANGUAGE: DEFAULT_CONF_LANGUAGE_VALUE,
         CONF_MODE: "api",
     }
 

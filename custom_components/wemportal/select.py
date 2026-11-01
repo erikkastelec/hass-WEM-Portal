@@ -47,31 +47,33 @@ class WemPortalSelect(WemPortalWritableEntity, SelectEntity):
         super().__init__(coordinator, config_entry, device_id, _unique_id, entity_data)
         self._options = entity_data["options"]
         self._options_names = entity_data["optionsNames"]
-
-        try:
-            val = entity_data["value"]
-            if val in self._options_names:
-                self._attr_current_option = val
-            elif val in self._options:
-                self._attr_current_option = self._options_names[self._options.index(val)]
-            else:
-                try:
-                    self._attr_current_option = self._options_names[self._options.index(int(val))]
-                except (ValueError, TypeError):
-                    if val is not None and self._options_names:
-                        best_match, score, _ = process.extractOne(
-                            str(val), self._options_names, processor=utils.default_process
-                        )
-                        if score >= 75:
-                            self._attr_current_option = best_match
-                        else:
-                            raise ValueError
-                    else:
-                        raise ValueError
-        except (ValueError, TypeError):
-            self._attr_current_option = None
-            _LOGGER.warning("Value %s not found in options %s (names: %s) for select %s", entity_data["value"], self._options, self._options_names, self._attr_name)
+        self._attr_current_option = self._resolve_option(entity_data["value"])
         _LOGGER.debug('Init select: %s: "%s"', self._attr_name, self._attr_current_option)
+
+    def _resolve_option(self, val) -> str | None:
+        """Match a raw portal value to one of the select option names."""
+        if val in self._options_names:
+            return val
+        if val in self._options:
+            return self._options_names[self._options.index(val)]
+        try:
+            return self._options_names[self._options.index(int(val))]
+        except (ValueError, TypeError):
+            if val is not None and self._options_names:
+                best_match, score, _ = process.extractOne(
+                    str(val), self._options_names, processor=utils.default_process
+                )
+                if score >= 75:
+                    return best_match
+
+        _LOGGER.warning(
+            "Value %s not found in options %s (names: %s) for select %s",
+            val,
+            self._options,
+            self._options_names,
+            self._attr_name,
+        )
+        return None
 
     @override
     async def async_select_option(self, option: str) -> None:
@@ -94,33 +96,13 @@ class WemPortalSelect(WemPortalWritableEntity, SelectEntity):
     @override
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
-
         try:
             val = self.coordinator.data[self._device_id][self._data_key]["value"]
-            if val in self._options_names:
-                self._attr_current_option = val
-            elif val in self._options:
-                self._attr_current_option = self._options_names[self._options.index(val)]
-            else:
-                try:
-                    self._attr_current_option = self._options_names[self._options.index(int(val))]
-                except (ValueError, TypeError):
-                    if val is not None and self._options_names:
-                        best_match, score, _ = process.extractOne(
-                            str(val), self._options_names, processor=utils.default_process
-                        )
-                        if score >= 75:
-                            self._attr_current_option = best_match
-                        else:
-                            raise ValueError
-                    else:
-                        raise ValueError
         except KeyError:
             self._attr_current_option = None
             _LOGGER.warning("Can't find %s", self._attr_unique_id)
             _LOGGER.debug("Sensor data %s", self.coordinator.data)
-        except (ValueError, TypeError):
-            self._attr_current_option = None
-            _LOGGER.warning("Value %s not found in options %s (names: %s) for select %s", val, self._options, self._options_names, self._attr_name)
+        else:
+            self._attr_current_option = self._resolve_option(val)
 
         self.async_write_ha_state()

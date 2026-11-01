@@ -162,6 +162,7 @@ class WemPortalApi:
                 ):
                     _LOGGER.info("Attempting to recover missing parameter definitions...")
                     await self.get_parameters()
+                    self._update_parameter_cache()
 
             if self.mode == "web":
                 self._merge_webscraping_data(next(iter(self.data), "0000"), await self.fetch_webscraping_data())

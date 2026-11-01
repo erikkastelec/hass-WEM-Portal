@@ -34,6 +34,24 @@ def parsed_values() -> dict[str, tuple[float | str | None, str | None]]:
             "°C",
             id="placeholder_with_unit_nested_header",
         ),
+        pytest.param(
+            "Heizkreis - Heizkreis E - Solltemperatur",
+            0.0,
+            "°C",
+            id="setpoint_placeholder_is_zero",
+        ),
+        pytest.param(
+            "Heizkreis - Heizkreis E - Anforderung",
+            0.0,
+            "°C",
+            id="demand_placeholder_is_zero",
+        ),
+        pytest.param(
+            "Heizkreis - Heizkreis E - Leistungsanforderung",
+            None,
+            "%",
+            id="power_demand_placeholder_is_none",
+        ),
     ],
 )
 def test_parse_expert_page(
