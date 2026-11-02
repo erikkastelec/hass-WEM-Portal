@@ -10,11 +10,10 @@ def parsed_values() -> dict[str, tuple[float | str | None, str | None]]:
     """Return the parsed expert page as (value, unit) by friendly name."""
     output = WemPortalScraper("test", "test").parse_expert_page(
         load_fixture("expert_page.html")
-    )[0]
+    )
     return {
         entity["friendlyName"]: (entity["value"], entity["unit"])
-        for key, entity in output.items()
-        if key != "cookie"
+        for entity in output.values()
     }
 
 

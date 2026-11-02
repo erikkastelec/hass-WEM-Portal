@@ -365,7 +365,7 @@ async def test_fetch_data_web_mode(session: ClientSession) -> None:
         "platform": "sensor",
     }
 
-    with patch.object(WemPortalScraper, "scrape", return_value=[{"system-temp": scraped}]):
+    with patch.object(WemPortalScraper, "scrape", return_value={"system-temp": scraped}):
         data = await api.fetch_data()
 
     assert list(data) == ["0000"]
