@@ -15,7 +15,7 @@ from custom_components.wemportal.const import (
     WEB_LOGIN_URL,
     WEB_MAIN_URL,
 )
-from custom_components.wemportal.exceptions import AuthError
+from custom_components.wemportal.exceptions import AuthError, WemPortalError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,41 +73,46 @@ class WemPortalScraper:
             return await self._scrape_expert_page(session)
 
     async def _login(self, session):
-        """Log in to the web portal with a browser-like session."""
-        # 1. GET Login page
+        """Log in to the web portal with a browser-like session.
+
+        Only a rejected login raises AuthError, as that stops the polling. Anything
+        else raises WemPortalError, so the next poll tries again.
+        """
         try:
             r1 = await session.get(WEB_LOGIN_URL)
-            if r1.status_code != 200:
-                raise AuthError(f"Authentication Error: Received {r1.status_code} on login page.")
-        except Exception as e:
-            raise AuthError(f"Authentication Error: {e}")
+        except requests.RequestsError as exc:
+            raise WemPortalError(f"Could not open the login page: {exc}") from exc
+        if r1.status_code != 200:
+            raise WemPortalError(f"Received {r1.status_code} on the login page")
 
         tree = html.fromstring(r1.text)
         viewstate_elem = tree.xpath("//*[@id='__VIEWSTATE']/@value")
         eventval_elem = tree.xpath("//*[@id='__EVENTVALIDATION']/@value")
-        
         if not viewstate_elem or not eventval_elem:
-            raise AuthError("Authentication Error: Could not find VIEWSTATE or EVENTVALIDATION.")
-            
-        viewstate = viewstate_elem[0]
-        eventval = eventval_elem[0]
+            raise WemPortalError("Could not find VIEWSTATE or EVENTVALIDATION on the login page")
 
-        # 2. POST Login
         login_data = {
-            "__VIEWSTATE": viewstate,
-            "__EVENTVALIDATION": eventval,
+            "__VIEWSTATE": viewstate_elem[0],
+            "__EVENTVALIDATION": eventval_elem[0],
             "ctl00$content$tbxUserName": self.username,
             "ctl00$content$tbxPassword": self.password,
             "ctl00$content$btnLogin": "Anmelden",
         }
-        
-        r2 = await session.post(WEB_LOGIN_URL, data=login_data, allow_redirects=True)
+        try:
+            r2 = await session.post(WEB_LOGIN_URL, data=login_data, allow_redirects=True)
+        except requests.RequestsError as exc:
+            raise WemPortalError(f"Could not submit the login form: {exc}") from exc
         if r2.status_code != 200:
-            raise AuthError(f"Authentication Error: Encountered error after login. Received {r2.status_code}.")
+            raise WemPortalError(f"Received {r2.status_code} after logging in")
 
-        # Check if we were redirected back to login with an error (like AspxAutoDetectCookieSupport)
-        if "AspxAutoDetectCookieSupport" in r2.url or WEB_LOGIN_URL.lower() in r2.url.lower():
-            raise AuthError(f"Authentication Error: Login failed or cookies not detected. URL: {r2.url}")
+        if "AspxAutoDetectCookieSupport" in r2.url:
+            raise WemPortalError(f"The portal didn't detect the session cookies. URL: {r2.url}")
+        if WEB_LOGIN_URL.lower() not in r2.url.lower():
+            return
+        # The portal shows the login form again when it rejects the credentials
+        if html.fromstring(r2.text).xpath("//input[@name='ctl00$content$tbxUserName']"):
+            raise AuthError("Authentication Error: The WEM Portal rejected the username or password")
+        raise WemPortalError(f"Login failed with an unexpected page. URL: {r2.url}")
 
     async def _scrape_expert_page(self, session):
         """Open the expert page and return the extracted data."""
@@ -123,7 +128,7 @@ class WemPortalScraper:
         pageview_main_elem = tree_main.xpath("//*[@id='__ECNPAGEVIEWSTATE']/@value")
         
         if not viewstate_main_elem or not eventval_main_elem:
-            raise AuthError("Scraping Error: Could not find VIEWSTATE on main page.")
+            raise WemPortalError("Scraping Error: Could not find VIEWSTATE on main page.")
 
         form_data = {
             "__EVENTVALIDATION": eventval_main_elem[0],

@@ -6,6 +6,13 @@
           "username": "Username (email)",
           "password": "Password"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-enter the password",
+        "description": "The WEM Portal rejected the password for {username}.",
+        "data": {
+          "password": "Password"
+        }
       }
     },
     "error": {
@@ -14,7 +21,8 @@
       "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "Account is already configured"
+      "already_configured": "Account is already configured",
+      "reauth_successful": "Re-authentication was successful"
     }
   },
   "options": {
