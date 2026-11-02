@@ -181,4 +181,4 @@ class WemPortalScraper:
                     "ParameterID": name,
                 }
 
-        return [output]
+        return output

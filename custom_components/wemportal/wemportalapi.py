@@ -53,6 +53,8 @@ RELOGIN_DELAY = 5
 
 LOGIN_ERRORS = {400: AuthError, 403: ForbiddenError, 500: ServerError}
 
+CONNECTION_STATUSES = {0: "online", 7: "wrong_secret", 8: "busy", 50: "offline"}
+
 # Used when the portal doesn't return a description for a statistics group
 STATISTICS_FALLBACK_NAMES = {
     1: "Heating Energy Yield",
@@ -81,6 +83,16 @@ def _virtual_sensor(friendly_name, parameter_id, value, icon, unit=None, **extra
         "icon": icon,
         **extra,
     }
+
+
+def _statistics_group_name(group, language):
+    """Return the sensor name of a statistics group."""
+    name = group.get("Description")
+    if not name or not name.strip():
+        group_id = group.get("GroupType")
+        return STATISTICS_FALLBACK_NAMES.get(group_id, f"Energy {group_id}")
+    name = translate(language, name)
+    return name if "energy" in name.lower() else f"{name} Energy"
 
 
 def _response_details(body):
@@ -145,45 +157,24 @@ class WemPortalApi:
     async def fetch_data(self, enabled_devices=None, include_slow=True):
         """Fetch the data, where include_slow also fetches schedules and statistics."""
         try:
-            if self.mode != "web":
-                # Login and get device info
-                if not self.valid_login:
-                    await self.api_login()
-                # Fetch device and parameter data only at start, or recover missing metadata
-                if self.modules is None:
-                    await self.get_devices()
-                    self._restore_parameters()
-                    await self.get_parameters()
-                    self._update_parameter_cache()
-                elif any(
-                    "parameters" not in module
-                    for modules in self.modules.values()
-                    for module in modules.values()
-                ):
-                    _LOGGER.info("Attempting to recover missing parameter definitions...")
-                    await self.get_parameters()
-                    self._update_parameter_cache()
-
             if self.mode == "web":
-                self._merge_webscraping_data(next(iter(self.data), "0000"), await self.fetch_webscraping_data())
-            elif self.mode == "api":
-                await self.get_data(enabled_devices, include_slow)
-            else:
-                # Scrape once per scan interval, with 10 s of slack for the poll timing
-                if (
-                    self.last_scraping_update is None
-                    or time.monotonic() - self.last_scraping_update + 10 > self.scan_interval
-                ):
-                    try:
-                        self._merge_webscraping_data(next(iter(self.data), "0000"), await self.fetch_webscraping_data())
-                        self.last_scraping_update = time.monotonic()
-                    except Exception as exc:
-                        # Don't raise, so the API can still fetch the bulk of the data
-                        _LOGGER.warning("Web scraper failed this cycle. Falling back to API only. Error: %s", exc)
+                await self._scrape()
+                return self.data
 
-                # The API always runs as a resilient fallback
-                await self.get_data(enabled_devices, include_slow)
+            await self._load_metadata()
+            # Scrape once per scan interval, with 10 s of slack for the poll timing
+            if self.mode == "both" and (
+                self.last_scraping_update is None
+                or time.monotonic() - self.last_scraping_update + 10 > self.scan_interval
+            ):
+                try:
+                    await self._scrape()
+                    self.last_scraping_update = time.monotonic()
+                except Exception as exc:
+                    # Don't raise, so the API can still fetch the bulk of the data
+                    _LOGGER.warning("Web scraper failed this cycle. Falling back to API only. Error: %s", exc)
 
+            await self.get_data(enabled_devices, include_slow)
             return self.data
 
         except WemPortalError:
@@ -192,34 +183,34 @@ class WemPortalApi:
             # Wrap unexpected errors so the coordinator treats them as a failed update
             raise WemPortalError("Unexpected error occurred while fetching data") from exc
 
-    def _merge_webscraping_data(self, device_id, webscraping_data):
-        if str(device_id) not in self.data:
-            self.data[str(device_id)] = {}
+    async def _load_metadata(self):
+        """Log in, and fetch the devices and parameter definitions if they are missing."""
+        if not self.valid_login:
+            await self.api_login()
+        if self.modules is None:
+            await self.get_devices()
+            self._restore_parameters()
+            await self.get_parameters()
+            self._update_parameter_cache()
+        elif any(
+            "parameters" not in module
+            for modules in self.modules.values()
+            for module in modules.values()
+        ):
+            _LOGGER.info("Attempting to recover missing parameter definitions...")
+            await self.get_parameters()
+            self._update_parameter_cache()
 
-        for key, new_val in webscraping_data.items():
-            if isinstance(new_val, dict):
-                if "friendlyName" in new_val:
-                    new_val["friendlyName"] = translate(self.language, new_val["friendlyName"])
-                
-                # Preserve the old unit if the current scrape is missing it (e.g. value is "--")
-                # This prevents Home Assistant from complaining about unit changes.
-                if new_val.get("unit") is None:
-                    old_val = self.data[str(device_id)].get(key)
-                    if isinstance(old_val, dict) and old_val.get("unit") is not None:
-                        new_val["unit"] = old_val.get("unit")
-                        
-            self.data[str(device_id)][key] = new_val
-
-    async def fetch_webscraping_data(self):
-        """Scrape the expert page of the WEM Portal."""
-        try:
-            data = (await WemPortalScraper(self.username, self.password).scrape())[0]
-        except AuthError as exc:
-            raise AuthError(
-                "AuthenticationError: Could not login with provided username and password. "
-                "Check if your config contains the right credentials"
-            ) from exc
-        return data
+    async def _scrape(self):
+        """Scrape the expert page into the first device."""
+        scraped = await WemPortalScraper(self.username, self.password).scrape()
+        device_data = self.data.setdefault(next(iter(self.data), "0000"), {})
+        for key, values in scraped.items():
+            values["friendlyName"] = translate(self.language, values["friendlyName"])
+            # Keep the unit while the value is missing ("--"), as HA warns when units change
+            if values["unit"] is None and (old_values := device_data.get(key)):
+                values["unit"] = old_values.get("unit")
+            device_data[key] = values
 
     async def api_login(self):
         payload = {
@@ -335,80 +326,70 @@ class WemPortalApi:
             ]
 
     async def get_parameters(self):
-        assert self.modules is not None
+        """Fetch the parameter definitions of the modules that don't have them yet."""
         for device_id, device_data in self.data.items():
             if device_data["ConnectionStatus"] != 0:
                 continue
-            _LOGGER.debug("Fetching api parameters data for device %s", device_id)
             _LOGGER.debug("Modules of device %s: %s", device_id, self.modules[device_id])
             delete_candidates = []
             forbidden_count = 0
-            for values in self.modules[device_id].values():
-                # Check if parameters are already cached
-                if "parameters" in values and values["parameters"]:
-                    _LOGGER.debug(
-                        "Parameters for device %s, index %s, and type %s are already cached.",
-                        device_id, values["Index"], values["Type"]
-                    )
+            for key, module in self.modules[device_id].items():
+                if module.get("parameters"):
                     continue
-                data = {
-                    "DeviceID": int(device_id),
-                    "ModuleIndex": values["Index"],
-                    "ModuleType": values["Type"],
-                }
+                await asyncio.sleep(5)
                 try:
-                    await asyncio.sleep(5)
                     response = await self.make_api_call(
-                        API_EVENT_TYPE_READ_URL, data=data, do_retry=False
+                        API_EVENT_TYPE_READ_URL,
+                        data={
+                            "DeviceID": int(device_id),
+                            "ModuleIndex": module["Index"],
+                            "ModuleType": module["Type"],
+                        },
+                        do_retry=False,
                     )
                 except WemPortalError as exc:
-                    if isinstance(exc.__cause__, aiohttp.ClientResponseError):
-                        status_code = exc.__cause__.status
-                        if status_code == 403:
-                            forbidden_count += 1
-                            if forbidden_count >= 3:
-                                _LOGGER.error(
-                                    "Rate limited (403) three times while fetching parameters "
-                                    "for device %s. Aborting.",
-                                    device_id
-                                )
-                                raise ForbiddenError("Rate limited during get_parameters") from exc
-                            
-                            _LOGGER.warning(
-                                "Rate limit warning (403) for device %s module %s. Strike %s of 3.",
-                                device_id,
-                                values["Index"],
-                                forbidden_count
-                            )
-                            continue
-                        elif status_code == 400:
-                            _LOGGER.warning(
-                                "Module index %s type %s is unsupported by WEM Portal. "
-                                "Deleting from cache.",
-                                values["Index"],
-                                values["Type"]
-                            )
-                            delete_candidates.append((values["Index"], values["Type"]))
-                            continue
-                    raise
-                parameters = {}
+                    status = getattr(exc.__cause__, "status", None)
+                    if status == 400:
+                        _LOGGER.warning(
+                            "Module index %s type %s is unsupported by WEM Portal. Deleting from cache.",
+                            module["Index"],
+                            module["Type"],
+                        )
+                        delete_candidates.append(key)
+                        continue
+                    if status != 403:
+                        raise
+                    forbidden_count += 1
+                    if forbidden_count >= 3:
+                        _LOGGER.error(
+                            "Rate limited (403) three times while fetching parameters for device %s. Aborting.",
+                            device_id,
+                        )
+                        raise ForbiddenError("Rate limited during get_parameters") from exc
+                    _LOGGER.warning(
+                        "Rate limit warning (403) for device %s module %s. Strike %s of 3.",
+                        device_id,
+                        module["Index"],
+                        forbidden_count,
+                    )
+                    continue
+
                 try:
-                    for parameter in response["Parameters"]:
-                        parameters[parameter["ParameterID"]] = parameter
-                    if not parameters:
-                        delete_candidates.append((values["Index"], values["Type"]))
-                    else:
-                        self.modules[device_id][(values["Index"], values["Type"])][
-                            "parameters"
-                        ] = parameters
+                    parameters = {
+                        parameter["ParameterID"]: parameter for parameter in response["Parameters"]
+                    }
                 except KeyError:
                     _LOGGER.warning(
                         "An error occurred while gathering parameters data for module %s. Skipping this module. "
                         "If this problem persists, open an issue at "
                         "https://github.com/erikkastelec/hass-WEM-Portal/issues",
-                        values
+                        module,
                     )
                     continue
+                if parameters:
+                    module["parameters"] = parameters
+                else:
+                    delete_candidates.append(key)
             for key in delete_candidates:
                 del self.modules[device_id][key]
 
@@ -482,11 +463,14 @@ class WemPortalApi:
                 f"Error changing parameter {parameter_id} value"
             ) from exc
 
-    # Refresh data and retrieve new data
+    def _target_devices(self, enabled_devices):
+        """Return the known devices to fetch, which are all of them if none are enabled."""
+        return [device_id for device_id in enabled_devices or self.data if device_id in self.data]
+
     async def get_data(self, enabled_devices=None, include_slow=True):
-        _LOGGER.debug("Fetching fresh api data. enabled_devices=%s, self.data.keys()=%s", enabled_devices, list(self.data.keys()))
-        target_devices = enabled_devices if enabled_devices else list(self.data.keys())
-        _LOGGER.debug("Computed target_devices=%s", target_devices)
+        """Refresh and read the values of the devices."""
+        target_devices = self._target_devices(enabled_devices)
+        _LOGGER.debug("Fetching fresh api data for devices %s", target_devices)
         now = time.time()
         fetch_circuit_times = (
             include_slow and now - self.last_circuit_times_fetch >= SLOW_UPDATE_INTERVAL
@@ -494,18 +478,12 @@ class WemPortalApi:
         if fetch_circuit_times:
             self.last_circuit_times_fetch = now
         for device_id in target_devices:
-            if device_id not in self.data:
-                continue
-
-            # 1. Fetch Device Status First
             try:
                 status_response = await self.make_api_call(
                     API_DEVICE_STATUS_READ_URL,
                     data={"DeviceID": int(device_id)},
                 )
-
-                status_map = {0: "online", 7: "wrong_secret", 8: "busy", 50: "offline"}
-                conn_status = status_map.get(status_response.get("ConnectionStatus", -1), "unknown")
+                conn_status = CONNECTION_STATUSES.get(status_response.get("ConnectionStatus", -1), "unknown")
                 errors = status_response.get("Errors", [])
                 error_msg = ", ".join(str(e) for e in errors) if errors else "None"
 
@@ -528,26 +506,18 @@ class WemPortalApi:
             except Exception as exc:
                 self._log_request_failure(f"device status (device {device_id})", exc)
 
-            # 2. Proceed with data fetch
-            try:
-                data = {
-                    "DeviceID": int(device_id),
-                    "Modules": [
-                        {
-                            "ModuleIndex": module["Index"],
-                            "ModuleType": module["Type"],
-                            "Parameters": [
-                                {"ParameterID": parameter}
-                                for parameter in module["parameters"].keys()
-                            ],
-                        }
-                        for module in self.modules[device_id].values()
-                        if "parameters" in module and module["parameters"]
-                    ],
-                }
-            except KeyError as exc:
-                _LOGGER.debug("%s: %s", DATA_GATHERING_ERROR, self.modules[device_id])
-                raise WemPortalError(DATA_GATHERING_ERROR) from exc
+            data = {
+                "DeviceID": int(device_id),
+                "Modules": [
+                    {
+                        "ModuleIndex": module["Index"],
+                        "ModuleType": module["Type"],
+                        "Parameters": [{"ParameterID": parameter} for parameter in module["parameters"]],
+                    }
+                    for module in self.modules[device_id].values()
+                    if module.get("parameters")
+                ],
+            }
 
             try:
                 await self.make_api_call(
@@ -575,11 +545,9 @@ class WemPortalApi:
                 # logging in again next cycle
                 self.valid_login = False
 
-            # 3. Fetch Heating Schedules (Rate limited)
             if fetch_circuit_times:
                 await self.get_circuit_times(device_id)
 
-        # 4. Fetch Energy Statistics (Rate limited)
         if include_slow:
             await self.get_statistics(enabled_devices)
 
@@ -643,10 +611,7 @@ class WemPortalApi:
         self.last_statistics_fetch = now
         _LOGGER.debug("Fetching statistics data")
         
-        target_devices = enabled_devices if enabled_devices else list(self.data.keys())
-        for device_id in target_devices:
-            if device_id not in self.data:
-                continue
+        for device_id in self._target_devices(enabled_devices):
             try:
                 refresh_resp = await self.make_api_call(
                     API_STATISTICS_REFRESH_URL,
@@ -667,16 +632,6 @@ class WemPortalApi:
 
                 for group in group_types:
                     group_id = group.get("GroupType")
-                    group_name = group.get("Description")
-                    if not group_name or not group_name.strip():
-                        group_name = STATISTICS_FALLBACK_NAMES.get(group_id, f"Energy {group_id}")
-                    else:
-                        translated_group = translate(self.language, group_name)
-                        if "energy" not in translated_group.lower():
-                            group_name = f"{translated_group} Energy"
-                        else:
-                            group_name = translated_group
-                    
                     request = f"Statistics for group {group_id} (device {device_id})"
 
                     try:
@@ -691,7 +646,7 @@ class WemPortalApi:
                         # The last entry is this year's running total
                         sensor_name = f"Energy_{group_id}"
                         self.data[device_id][f"{device_id}-{sensor_name}"] = _virtual_sensor(
-                            group_name,
+                            _statistics_group_name(group, self.language),
                             sensor_name,
                             values[-1].get("Value", 0.0),
                             "mdi:lightning-bolt",
