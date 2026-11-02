@@ -4,6 +4,9 @@ from unittest.mock import patch
 import pytest
 from homeassistant import config_entries
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD
+from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.wemportal.const import (
     CONF_LANGUAGE,
@@ -101,3 +104,49 @@ async def test_form_cannot_connect(hass):
 
     assert result2["type"] == "form"
     assert result2["errors"] == {"base": "cannot_connect"}
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "error"),
+    [
+        pytest.param(AuthError, "invalid_auth", id="invalid_auth"),
+        pytest.param(Exception, "cannot_connect", id="cannot_connect"),
+    ],
+)
+async def test_reauth(
+    hass: HomeAssistant, side_effect: type[Exception], error: str
+) -> None:
+    """Test a new password can be entered after the portal rejected the old one."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={CONF_USERNAME: "test-username", CONF_PASSWORD: "old-password"},
+        options={CONF_MODE: "web"},
+    )
+    entry.add_to_hass(hass)
+
+    result = await entry.start_reauth_flow(hass)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+
+    with patch(
+        "custom_components.wemportal.config_flow.WemPortalScraper.login",
+        side_effect=side_effect,
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_PASSWORD: "wrong-password"}
+        )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": error}
+
+    # The mode comes from the options, so web mode only checks the web login
+    with patch(
+        "custom_components.wemportal.config_flow.WemPortalScraper.login"
+    ) as mock_login:
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_PASSWORD: "new-password"}
+        )
+    mock_login.assert_awaited_once()
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert entry.data[CONF_PASSWORD] == "new-password"
